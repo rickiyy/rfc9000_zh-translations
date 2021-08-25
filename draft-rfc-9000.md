@@ -748,7 +748,7 @@ first_stream_id_of_type)`流ID的流才可以被打开，流ID类型详见{{stre
 
 每个连接ID都有一个关联的序列号，帮助检查NEW_CONNECTION_ID或RETIRE_CONNECTION_ID帧中是否使用了相同的值。初始连接ID是由终端在握手过程中发送的长包头中源连接ID字段中指定的。初始连接ID的序列号是0。如果preferred_address传输参数有设置，那么提供的连接ID的序列号是1。
 
-可以通过向对端发送NEW_CONNECTION_ID帧({{frame-new-connection-id}})来增加连接ID。每个新产生的连接ID的序列号必须(MUST)加1。客户端选择的第一个目的连接ID以及任何重传包的连接ID不会分配序列号。
+可以通过向对端发送NEW_CONNECTION_ID帧({{frame-new-connection-id}})来增加连接ID。每个新产生的连接ID的序列号必须(MUST)加1。客户端选择的第一个目的连接ID以及任何重试包的连接ID不会分配序列号。
 
 当终端发布一个连接ID后，它必须(MUST)在这个连接上持续接收携带这个连接ID的数据包，直到对端通过RETIRE_CONNECTION_ID帧({{frame-retire-connection-id}})废弃这个连接ID。
 
@@ -811,7 +811,7 @@ NEW_CONNECTION_ID帧可能导致终端增加一些活跃的连接ID以及基于R
 
 如果数据包与对应的连接状态冲突，则应该丢弃它，即使它已经与已存连接匹配上。比如，数据包指定的协议版本与连接不符或者使用可用的秘钥解密时失败，该数据包会被丢弃。
 
-缺乏强保护的数据包，比如初始包，重传包，版本协商包可以(MAY)被忽略。如果处理数据包的内容前发现了一个错误，或者处理过程中有较大变化，终端必须(MUST)产生连接错误。
+缺乏强保护的数据包，比如初始包，重试包，版本协商包可以(MAY)被忽略。如果处理数据包的内容前发现了一个错误，或者处理过程中有较大变化，终端必须(MUST)产生连接错误。
 
 ### 客户端包处理(Client Packet Handling) {#client-pkt-handling}
 
@@ -821,219 +821,113 @@ NEW_CONNECTION_ID帧可能导致终端增加一些活跃的连接ID以及基于R
 
 如果客户端收到数据包不同于它初始选择的版本，它必须(MUST)丢弃这个数据包。
 
-### Server Packet Handling {#server-pkt-handling}
+### 服务端包处理(Server Packet Handling) {#server-pkt-handling}
 
-If a server receives a packet that indicates an unsupported version and if the
-packet is large enough to initiate a new connection for any supported version,
-the server SHOULD send a Version Negotiation packet as described in {{send-vn}}.
-A server MAY limit the number of packets to which it responds with a Version
-Negotiation packet.  Servers MUST drop smaller packets that specify unsupported
-versions.
+如果服务端收到一个不支持版本的包，并且数据包有足够大小去发起任意支持版本的新连接时，服务端应当(SHOULD)按{{send-vn}}中描述的那样发送一个版本协商包。服务端可以(MAY)限制需要响应版本协商包的数据包个数。服务端必须(MUST)丢弃指定了不支持版本的更小的包。
 
-The first packet for an unsupported version can use different semantics and
-encodings for any version-specific field.  In particular, different packet
-protection keys might be used for different versions.  Servers that do not
-support a particular version are unlikely to be able to decrypt the payload of
-the packet or properly interpret the result.  Servers SHOULD respond with a
-Version Negotiation packet, provided that the datagram is sufficiently long.
+第一个不支持版本的数据包中在版本-相关字段上可能使用了不同的语义或编码。特别地，为不同版本可能使用了不同的包保护秘钥。不支持特定版本的服务端不太可能有解密包载荷的能力或正确理解结果。服务端应当(SHOULD)回复一个版本协商包，前提是报文足够长。
 
-Packets with a supported version, or no Version field, are matched to a
-connection using the connection ID or -- for packets with zero-length connection
-IDs -- the local address and port.  These packets are processed using the
-selected connection; otherwise, the server continues as described below.
+携带支持的版本的数据包，或者如果没有Version字段，但能匹配到一条已有连接，比如连接ID匹配或者数据包中的连接ID长度为0，但本地地址与端口能匹配已有连接的数据包。这些数据包中，能匹配上的数据包则按对应连接处理，否则服务端会按如下描述处理。
 
-If the packet is an Initial packet fully conforming with the specification, the
-server proceeds with the handshake ({{handshake}}). This commits the server to
-the version that the client selected.
+如果数据包是完全符合规范的初始包，服务端会按握手({{handshake}})处理。这使得服务端切到客户端选择的版本上。
 
-If a server refuses to accept a new connection, it SHOULD send an Initial packet
-containing a CONNECTION_CLOSE frame with error code CONNECTION_REFUSED.
+如果服务端拒绝接受新的连接，它应当(SHOULD)发送一个具有CONNECTION_REFUSED错误码并包含CONNECTION_CLOSE帧的初始报文。
 
-If the packet is a 0-RTT packet, the server MAY buffer a limited number of these
-packets in anticipation of a late-arriving Initial packet. Clients are not able
-to send Handshake packets prior to receiving a server response, so servers
-SHOULD ignore any such packets.
+如果数据包是0-RTT数据包，服务端可以(MAY)有限制数量的缓存这些包，以期待后续到达的初始报文。在收到服务端的响应前，客户端不能发送握手包，因此服务端应当(SHOULD)忽略这样的报文。
 
-Servers MUST drop incoming packets under all other circumstances.
+在所有的其他情况下，服务端必须(MUST)丢弃入包。
 
-### Considerations for Simple Load Balancers
+### 为普通负载均衡器的考虑(Considerations for Simple Load Balancers)
 
-A server deployment could load-balance among servers using only source and
-destination IP addresses and ports. Changes to the client's IP address or port
-could result in packets being forwarded to the wrong server. Such a server
-deployment could use one of the following methods for connection continuity
-when a client's address changes.
+服务端的部署可以仅使用源目的IP端口来在服务器间做负载均衡。当客户端的IP地址或端口改变时会导致数据包被发送到错误的服务器上。因此服务端的部署可以使用如下方法以保持当客户端地址变化时，连接持续。
 
-* Servers could use an out-of-band mechanism to forward packets to the correct
-  server based on connection ID.
+* 服务端可以使用带外的机制基于连接ID将数据包发送到正确的服务器上。
 
-* If servers can use a dedicated server IP address or port, other than the one
-  that the client initially connects to, they could use the preferred_address
-  transport parameter to request that clients move connections to that dedicated
-  address. Note that clients could choose not to use the preferred address.
+* 如果服务器使用专用的IP与端口，客户端可以向多个地址发起连接，它可以通过preferred_address的传输参数来请求客户端将连接转移到专用地址上。注意，客户端也可以选择不使用这个推荐地址。
 
-A server in a deployment that does not implement a solution to maintain
-connection continuity when the client address changes SHOULD indicate that
-migration is not supported by using the disable_active_migration transport
-parameter.  The disable_active_migration transport parameter does not prohibit
-connection migration after a client has acted on a preferred_address transport
-parameter.
+如果部署的服务器没有实现当客户端地址变化后连接持续的方法，它应当(SHOULD)通过disable_active_migration传输参数指明不支持迁移。disable_active_migration参数在客户端切到preferred_address上的地址后并不禁止连接迁移。
 
-Server deployments that use this simple form of load balancing MUST avoid the
-creation of a stateless reset oracle; see {{reset-oracle}}.
+使用负载均衡的服务端部署时必须(MUST)避免创建权威的无状态reset，详见{{reset-oracle}}。
+
+## 连接上的操作(Operations on Connections)
+
+本文档并不为QUIC定义一份API，而是定义应用协议能依赖的关于连接的功能集。应用协议可以假定QUIC实现需要提供的接口中包含本章节所描述的操作。一个为特定应用协议涉及的实现可以值提供那个应用协议需要的操作。
+
+当处于客户端角色时，应用协议可以：
+
+- 打开连接，如同{{handshake}}中所描述的开始交换
+- 当可用时使能提前数据(Early Data，0-RTT)
+- 当提前数据被服务端接收或拒绝时会被通知
+
+当处于服务端角色时，应用协议可以：
+
+- 监听新收到的连接，为{{handshake}}中所描述的交换做准备；
+- 当支持提前数据时，把应用控制数据嵌入到TLS会话恢复凭证里面发给客户端，
+- 当支持提前数据时，利用客户端提供的恢复凭证取回应用控制数据，并基于这些信息来决定接收或拒绝提前数据。
+
+在任意角色上，应用协议可以：
+
+- 为各种类型的流的初始允许数量配置一个最小值；
+- 通过设置流与连接级别的流量控制限制来为接收缓冲区控制资源分配；
+- 识别握手过程成功完成还是仍在继续；
+- 通过生成PING帧，或者在空闲超时({{idle-timeout}})过期前请求传输发送额外的帧，来保持连接避免静默关闭；
+- 立即关闭({{immediate-close}})连接
 
 
-## Operations on Connections
+# 版本协商(Version Negotiation) {#version-negotiation}
 
-This document does not define an API for QUIC; it instead defines a set of
-functions for QUIC connections that application protocols can rely upon.  An
-application protocol can assume that an implementation of QUIC provides an
-interface that includes the operations described in this section.  An
-implementation designed for use with a specific application protocol might
-provide only those operations that are used by that protocol.
+版本协商允许服务端指明它不支持客户端使用的版本。服务端在每个发起新连接的包的响应中发送版本协商包，详见{{packet-handling}}。
 
-When implementing the client role, an application protocol can:
+客户端发的第一个包的大小会决定服务端是否发送版本协商包。支持多个QUIC版本的客户端应当(SHOULD)保证发送的第一个UDP报文的大小是它所支持的所有版本中最小报文大小的最大值。这样可以确保当有一个共同支持的版本时服务端会响应。服务端可能不会发送版本协商报文，如果它收到的报文比不同版本上指定的最小值还小时，参考{{initial-size}}。
 
-- open a connection, which begins the exchange described in {{handshake}};
-- enable Early Data when available; and
-- be informed when Early Data has been accepted or rejected by a server.
+## 发送版本协商包(Sending Version Negotiation Packets) {#send-vn}
 
-When implementing the server role, an application protocol can:
+如果服务端无法接收客户端选择的版本，服务端可以回复版本协商包，参考{{packet-version}}。这包含了服务端能接收的版本列表。终端禁止(MUST NOT)在收到版本协商包时发送版本协商包作为应答。
 
-- listen for incoming connections, which prepares for the exchange described in
-  {{handshake}};
-- if Early Data is supported, embed application-controlled data in the TLS
-  resumption ticket sent to the client; and
-- if Early Data is supported, retrieve application-controlled data from the
-  client's resumption ticket and accept or reject Early Data based on that
-  information.
+系统允许客户端在处理不支持版本时不保持状态。尽管在应答中发送的初始包或版本协商包可能会丢包，客户端会发送新的报文直到它成功的收到应答除非它放弃这条连接。
 
-In either role, an application protocol can:
+服务端可以(MAY)限制它发送的版本协商包的数量。比如，有能力识别出0-RTT包的服务端可能选择不发送版本协商包作为0-RTT报文的应答，而是期望最终会收到一个初始报文。
 
-- configure minimum values for the initial number of permitted streams of each
-  type, as communicated in the transport parameters ({{transport-parameters}});
-- control resource allocation for receive buffers by setting flow control limits
-  both for streams and for the connection;
-- identify whether the handshake has completed successfully or is still ongoing;
-- keep a connection from silently closing, by either generating PING frames
-  ({{frame-ping}}) or requesting that the transport send additional frames
-  before the idle timeout expires ({{idle-timeout}}); and
-- immediately close ({{immediate-close}}) the connection.
+## 处理版本协商包(Handling Version Negotiation Packets) {#handle-vn}
+
+版本协商包在设计上是为了允许支持未来定义的功能的，这使得QUIC可以为一条连接协商它使用的版本。未来的标准定义可能会改变一个支持多个QUIC版本的实现如何对收到试图使用此版本建立连接的版本协商报文的反应。
+
+仅支持这个版本的客户端在收到版本协商报文时必须(MUST)放弃当前连接的尝试，以下两种除外。如果客户端已经收到并且成功的处理了其他报文，包括一个更早一点的版本协商包，那么客户端必须(MUST)丢弃版本协商包。客户端必须(MUST)丢弃一个包含客户端选择的QUIC版本的版本协商包。
+
+如何执行版本协商被留作未来的工作，定义在未来的标准规范中。特别地，未来的工作需要确保面对版本降级攻击时的稳固性，参考{{version-downgrade}}。
 
 
-# Version Negotiation {#version-negotiation}
+## 使用保留保本(Using Reserved Versions)
 
-Version negotiation allows a server to indicate that it does not support
-the version the client used.  A server sends a Version Negotiation packet in
-response to each packet that might initiate a new connection; see
-{{packet-handling}} for details.
+对于一个在未来使用新版本的服务端，客户端需要正确的处理不支持的版本。一些版本号(0x?a?a?a?a, 如{{versions}}中所定义)会被保留下来，用于容纳版本号的字段中。
 
-The size of the first packet sent by a client will determine whether a server
-sends a Version Negotiation packet. Clients that support multiple QUIC versions
-SHOULD ensure that the first UDP datagram they send is sized to the largest of
-the minimum datagram sizes from all versions they support, using PADDING frames
-({{frame-padding}}) as necessary. This ensures that the server responds if there
-is a mutually supported version. A server might not send a Version Negotiation
-packet if the datagram it receives is smaller than the minimum size specified in
-a different version; see {{initial-size}}.
+终端可以(MAY)添加保留版本到任意未知或不支持的版本忽略的字段上，去测试对端是否正确的忽略这个值。比如，终端可以在版本协商包中包含一个保留版本，参考{{packet-version}}。终端可以(MAY)发送一个保留版本的包去测试对端是否正确的丢弃这个包。
 
+# 加密与传输握手(Cryptographic and Transport Handshake) {#handshake}
 
-## Sending Version Negotiation Packets {#send-vn}
+QUIC依赖把加密与传输握手融合在一起来最小化连接建立的时延。QUIC使用CRYPTO帧({{frame-crypto}})去传递加密握手的信息。本文中定义的QUIC版本会标识为0x00000001，并使用{{QUIC-TLS}}中描述的TLS；不同的QUIC版本可能表明使用了不同的加密握手协议。
 
-If the version selected by the client is not acceptable to the server, the
-server responds with a Version Negotiation packet; see {{packet-version}}.  This
-includes a list of versions that the server will accept.  An endpoint MUST NOT
-send a Version Negotiation packet in response to receiving a Version Negotiation
-packet.
+QUIC为加密握手数据提供了可靠，有序的传输。QUIC包保护被用于尽可能多的对握手协议进行加密。加密握手协议必须(MUST)提供如下属性：
 
-This system allows a server to process packets with unsupported versions without
-retaining state.  Though either the Initial packet or the Version Negotiation
-packet that is sent in response could be lost, the client will send new packets
-until it successfully receives a response or it abandons the connection attempt.
+* 认证秘钥交换，即
 
-A server MAY limit the number of Version Negotiation packets it sends.  For
-instance, a server that is able to recognize packets as 0-RTT might choose not
-to send Version Negotiation packets in response to 0-RTT packets with the
-expectation that it will eventually receive an Initial packet.
+ * 服务端总是需要被认证
+
+ * 客户端可选被认证
+
+ * 每个连接产生不同且不相关的秘钥
+
+ * 秘钥被用于0-RTT与1-RTT数据包的保护。
+
+* 认证交换两端的传输参数以及为服务端的传输参数加密保护(参考{{transport-parameters}})。
+
+* 认证协商应用协议(TLS 使用应用层协议协商(ALPN){{?ALPN}}来达到这个目的)
+
+CRYPTO帧可以在不同的数据包编号空间上发送({{packet-numbers}})。为了确认加密握手数据的有序传输，CRYPTO帧在每个数据包编号空间上的偏移都从0开始。
 
 
-## Handling Version Negotiation Packets {#handle-vn}
 
-Version Negotiation packets are designed to allow for functionality to be
-defined in the future that allows QUIC to negotiate the version of QUIC to use
-for a connection.  Future Standards Track specifications might change how
-implementations that support multiple versions of QUIC react to Version
-Negotiation packets received in response to an attempt to establish a
-connection using this version.
-
-A client that supports only this version of QUIC MUST abandon the current
-connection attempt if it receives a Version Negotiation packet, with the
-following two exceptions. A client MUST discard any Version Negotiation packet
-if it has received and successfully processed any other packet, including an
-earlier Version Negotiation packet. A client MUST discard a Version Negotiation
-packet that lists the QUIC version selected by the client.
-
-How to perform version negotiation is left as future work defined by future
-Standards Track specifications.  In particular, that future work will
-ensure robustness against version downgrade attacks; see
-{{version-downgrade}}.
-
-
-## Using Reserved Versions
-
-For a server to use a new version in the future, clients need to correctly
-handle unsupported versions. Some version numbers (0x?a?a?a?a, as defined in
-{{versions}}) are reserved for inclusion in fields that contain version
-numbers.
-
-Endpoints MAY add reserved versions to any field where unknown or unsupported
-versions are ignored to test that a peer correctly ignores the value. For
-instance, an endpoint could include a reserved version in a Version Negotiation
-packet; see {{packet-version}}. Endpoints MAY send packets with a reserved
-version to test that a peer correctly discards the packet.
-
-
-# Cryptographic and Transport Handshake {#handshake}
-
-QUIC relies on a combined cryptographic and transport handshake to minimize
-connection establishment latency.  QUIC uses the CRYPTO frame ({{frame-crypto}})
-to transmit the cryptographic handshake.  The version of QUIC defined in this
-document is identified as 0x00000001 and uses TLS as described in {{QUIC-TLS}};
-a different QUIC version could indicate that a different cryptographic
-handshake protocol is in use.
-
-QUIC provides reliable, ordered delivery of the cryptographic handshake
-data. QUIC packet protection is used to encrypt as much of the handshake
-protocol as possible. The cryptographic handshake MUST provide the following
-properties:
-
-* authenticated key exchange, where
-
-   * a server is always authenticated,
-
-   * a client is optionally authenticated,
-
-   * every connection produces distinct and unrelated keys, and
-
-   * keying material is usable for packet protection for both 0-RTT and 1-RTT
-     packets.
-
-* authenticated exchange of values for transport parameters of both endpoints,
-  and confidentiality protection for server transport parameters (see
-  {{transport-parameters}}).
-
-* authenticated negotiation of an application protocol (TLS uses
-  Application-Layer Protocol Negotiation (ALPN) {{?ALPN}} for this purpose).
-
-The CRYPTO frame can be sent in different packet number spaces
-({{packet-numbers}}).  The offsets used by CRYPTO frames to ensure ordered
-delivery of cryptographic handshake data start from zero in each packet number
-space.
-
-{{fig-hs}} shows a simplified handshake and the exchange of packets and frames
-that are used to advance the handshake.  Exchange of application data during the
-handshake is enabled where possible, shown with an asterisk ("*").  Once the
-handshake is complete, endpoints are able to exchange application data freely.
+{{fig-hs}} 展示了一个简化的握手以及用于推进握手的包与帧的交换。握手期间的应用数据交换可能被启用，用星号（"*"）表示。握手完成后，终端可以自由的交换应用数据。
 
 ~~~
 Client                                               Server
@@ -1051,38 +945,20 @@ Handshake (CRYPTO)
 ~~~
 {: #fig-hs title="Simplified QUIC Handshake"}
 
-Endpoints can use packets sent during the handshake to test for Explicit
-Congestion Notification (ECN) support; see {{ecn}}. An endpoint validates
-support for ECN by observing whether the ACK frames acknowledging the first
-packets it sends carry ECN counts, as described in {{ecn-validation}}.
 
-Endpoints MUST explicitly negotiate an application protocol.  This avoids
-situations where there is a disagreement about the protocol that is in use.
+端点可以使用握手过程中发送的数据包来测试对显式拥塞通知（ECN）的支持；参见{{ecn}}。如{{ecn-validation}}所述，终端通过观察确认它发送的第一个数据包的ACK帧中是否带有ECN计数，来验证是否支持ECN。
 
+终端必须(MUST)明确的协商一个应用协议。这可以避免出现对正在使用的协议有分歧的场景。
 
-## Example Handshake Flows
+## 握手流程实例(Example Handshake Flows)
 
-Details of how TLS is integrated with QUIC are provided in {{QUIC-TLS}}, but
-some examples are provided here.  An extension of this exchange to support
-client address validation is shown in {{validate-retry}}.
+关于TLS如何与QUIC集成的细节在{{QUIC-TLS}}中提供，但这里也提供了一些例子。关于客户端地址验证的扩展在{{validate-retry}}中有展示。
 
-Once any address validation exchanges are complete, the
-cryptographic handshake is used to agree on cryptographic keys.  The
-cryptographic handshake is carried in Initial ({{packet-initial}}) and Handshake
-({{packet-handshake}}) packets.
+一旦任意地址校验完成交换，加密握手就会用于商定加密秘钥。加密握手在初始（{{packet-initial}}）和握手（{{packet-handshake}}）包中进行。
 
-{{tls-1rtt-handshake}} provides an overview of the 1-RTT handshake.  Each line
-shows a QUIC packet with the packet type and packet number shown first, followed
-by the frames that are typically contained in those packets. For instance, the
-first packet is of type Initial, with packet number 0, and contains a CRYPTO
-frame carrying the ClientHello.
+{{tls-1rtt-handshake}}提供了1-RTT握手的概述。 每行先展示了QUIC数据包的类型和包编号，随后时这些数据包中通常包含的帧。例如第，第一个包是Initial类型的，且包编号为0，包含了一个携带ClientHello的CRYPTO帧。
 
-Multiple QUIC packets -- even of different packet types -- can be coalesced into
-a single UDP datagram; see {{packet-coalesce}}. As a result, this handshake
-could consist of as few as four UDP datagrams, or any number more (subject to
-limits inherent to the protocol, such as congestion control and
-anti-amplification).  For instance, the server's first flight contains Initial
-packets, Handshake packets, and "0.5-RTT data" in 1-RTT packets.
+多个QUIC数据包 -- 即使包类型不同 -- 可以合并到一个UDP报文中，参考 {{packet-coalesce}}。因此，握手最少可以由4个UDP报文组成，也可以由数量更多的报文组成(受协议固有的限制，比如拥塞控制与反-放大)。例如，服务端第一个在途的1-RTT数据包中包中包含了初始包，握手包与"0.5-RTT 数据"。
 
 ~~~~
 Client                                                  Server
@@ -1102,10 +978,7 @@ Handshake[0]: CRYPTO[FIN], ACK[0]
 ~~~~
 {: #tls-1rtt-handshake title="Example 1-RTT Handshake"}
 
-{{tls-0rtt-handshake}} shows an example of a connection with a 0-RTT handshake
-and a single packet of 0-RTT data. Note that as described in
-{{packet-numbers}}, the server acknowledges 0-RTT data in 1-RTT packets, and
-the client sends 1-RTT packets in the same packet number space.
+{{tls-0rtt-handshake}}展示了一个具有0-RTT握手和单个0-RTT数据包的连接实例。注意，如{{packet-numbers}}中所描述，服务端在1-RTT包中确认0-RTT的数据，而客户端在同个包编码空间中发送1-RTT数据包。
 
 ~~~~
 Client                                                  Server
@@ -1127,114 +1000,54 @@ Handshake[0]: CRYPTO[FIN], ACK[0]
 {: #tls-0rtt-handshake title="Example 0-RTT Handshake"}
 
 
-## Negotiating Connection IDs {#negotiating-connection-ids}
+## 协商连接ID(Negotiating Connection IDs) {#negotiating-connection-ids}
 
-A connection ID is used to ensure consistent routing of packets, as described in
-{{connection-id}}.  The long header contains two connection IDs: the Destination
-Connection ID is chosen by the recipient of the packet and is used to provide
-consistent routing; the Source Connection ID is used to set the Destination
-Connection ID used by the peer.
+连接ID用于确认数据包路由的一致性，如{{connection-id}}中所述。长头包含了两个连接ID：目的连接ID是由报文的接受者选择，用于提供一致的路由；源连接ID用于设置对端使用的目的连接ID。
 
-During the handshake, packets with the long header ({{long-header}}) are used
-to establish the connection IDs used by both endpoints. Each endpoint uses the
-Source Connection ID field to specify the connection ID that is used in the
-Destination Connection ID field of packets being sent to them. After processing
-the first Initial packet, each endpoint sets the Destination Connection ID
-field in subsequent packets it sends to the value of the Source Connection ID
-field that it received.
+在握手过程中，携带长头({{long-header}})的数据包被用来建立两端使用的连接ID。每个终端都使用源连接ID来指定发送给它们的数据包中的目的连接ID。在处理完第一个初始包后，每个终端都会将它后续发送的数据包中的目的连接ID设置成它收到的源连接ID字段的值。
 
-When an Initial packet is sent by a client that has not previously received an
-Initial or Retry packet from the server, the client populates the Destination
-Connection ID field with an unpredictable value.  This Destination Connection ID
-MUST be at least 8 bytes in length.  Until a packet is received from the server,
-the client MUST use the same Destination Connection ID value on all packets in
-this connection.
+先前没有收到服务器上初始或重传的包的情况下，客户端发送一个初始包时，会用一个无法预期的值来填充目的连接ID字段。目的连接ID字段的长度必须(MUST)被设置成至少8个字节。在收到服务端的数据包之前，客户端必须(MUST)为这个连接的所有数据包使用相同的目的连接ID值。
 
-The Destination Connection ID field from the first Initial packet sent by a
-client is used to determine packet protection keys for Initial packets.  These
-keys change after receiving a Retry packet; see {{Section 5.2 of QUIC-TLS}}.
+客户端发送的第一个初始包中的目的连接ID字段被用于确定初始包保护的秘钥。 这些密钥在收到Retry数据包后会发生变化；参考{{Section 5.2 of QUIC-TLS}}。
 
-The client populates the Source Connection ID field with a value of its choosing
-and sets the Source Connection ID Length field to indicate the length.
+客户端使用它选择的值来填充源连接ID字段，以及设置源连接ID长度字段去指明它的长度。
 
-0-RTT packets in the first flight use the same Destination Connection ID and
-Source Connection ID values as the client's first Initial packet.
+第一次在途的0-RTT数据包使用与客户端第一个初始报文相同的源目的连接ID。
 
-Upon first receiving an Initial or Retry packet from the server, the client uses
-the Source Connection ID supplied by the server as the Destination Connection ID
-for subsequent packets, including any 0-RTT packets.  This means that a client
-might have to change the connection ID it sets in the Destination Connection ID
-field twice during connection establishment: once in response to a Retry packet
-and once in response to an Initial packet from the server. Once a client has
-received a valid Initial packet from the server, it MUST discard any subsequent
-packet it receives on that connection with a different Source Connection ID.
+第一次收到服务端的初始或重试包时，客户端使用服务端提供的源连接ID作为后续包的目的连接ID，包括0-RTT包。这意味着在建立连接的过程中，客户端可能会改变两次它设置的目的连接ID：一次是对重试包的响应时，一次是对服务端过来的初始包时。
+客户端从服务端接收到一个有效的初始包，它必须(MUST)忽略在该连接上收到的带有不同源连接ID的任何后续包。
 
-A client MUST change the Destination Connection ID it uses for sending packets
-in response to only the first received Initial or Retry packet.  A server MUST
-set the Destination Connection ID it uses for sending packets based on the first
-received Initial packet. Any further changes to the Destination Connection ID
-are only permitted if the values are taken from NEW_CONNECTION_ID frames; if
-subsequent Initial packets include a different Source Connection ID, they MUST
-be discarded.  This avoids unpredictable outcomes that might otherwise result
-from stateless processing of multiple Initial packets with different Source
-Connection IDs.
+客户端必须(MUST)只对第一个收到的初始或重试包响应时，才改变它用于发包的目的连接ID。服务端必须(MUST)基于第一个收到的初始包来设置它用于发包的目的连接ID。
+后续只有从NEW_CONNECTION_ID帧中拿到ID，才允许改变目的地连接ID；如果后续的初始包中包含了不同的源连接ID，这些包必须(MUST)被丢弃。
+这可以避免对多个带有不同源连接ID的初始包进行无状态处理时产生不可预测的后果。
 
-The Destination Connection ID that an endpoint sends can change over the
-lifetime of a connection, especially in response to connection migration
-({{migration}}); see {{issue-cid}} for details.
+终端发送的目的连接ID在连接的生命周期中可能会变化，尤其是在对连接迁移({{migration}})的响应时，详见{{issue-cid}}。
+
+## 验证连接ID(Authenticating Connection IDs) {#cid-auth}
+
+终端在握手过程对连接ID的选择会使用传输参数中的信息来验证，参考{{transport-parameters}}。这确保了所有用于握手的连接ID会被加密握手认证。
+
+每个终端在initial_source_connection_id传输参数中包含了它发送的第一个初始包的源连接ID字段的值；参考{{transport-parameter-definitions}}。
+服务端在original_destination_connection_id传输参数中包含了它从客户端收到的第一个初始包中的目的连接ID字段；如果服务端发送了重试包，则代表在发送重试包之前它已经收到了第一个初始包。
+如果发送重试包，服务端也会将源连接ID字段包含在重试包中的retry_source_connection_id传输参数里。
 
 
-## Authenticating Connection IDs {#cid-auth}
+对端提供的传输参数的值必须(MUST)匹配终端发送(对于服务端就是接收)的初始包中的目的和源连接ID。终端必须(MUST)验证收到的传输参数与连接ID是否匹配。在传输参数中包含连接ID以及校验确保了攻击者无法在握手过程中注入攻击者选择的连接ID的包来影响能成功建立的连接选择连接ID。
 
-The choice each endpoint makes about connection IDs during the handshake is
-authenticated by including all values in transport parameters; see
-{{transport-parameters}}. This ensures that all connection IDs used for the
-handshake are also authenticated by the cryptographic handshake.
+终端必须(MUST)将来自任一终端的initial_source_connection_id传输参数缺失或者来自服务端的original_destination_connection_id传输参数缺失视为TRANSPORT_PARAMETER_ERROR类型的连接错误。
 
-Each endpoint includes the value of the Source Connection ID field from the
-first Initial packet it sent in the initial_source_connection_id transport
-parameter; see {{transport-parameter-definitions}}. A server includes the
-Destination Connection ID field from the first Initial packet it received from
-the client in the original_destination_connection_id transport parameter; if the
-server sent a Retry packet, this refers to the first Initial packet received
-before sending the Retry packet. If it sends a Retry packet, a server also
-includes the Source Connection ID field from the Retry packet in the
-retry_source_connection_id transport parameter.
+终端必须(MUST)将如下几项当做TRANSPORT_PARAMETER_ERROR或PROTOCOL_VIOLATION的连接错误处理：
 
-The values provided by a peer for these transport parameters MUST match the
-values that an endpoint used in the Destination and Source Connection ID fields
-of Initial packets that it sent (and received, for servers). Endpoints MUST
-validate that received transport parameters match received connection ID values.
-Including connection ID values in transport parameters and verifying them
-ensures that an attacker cannot influence the choice of connection ID for a
-successful connection by injecting packets carrying attacker-chosen connection
-IDs during the handshake.
+* 收到重试包之后从服务端没有提供retry_source_connection_id传输参数
 
-An endpoint MUST treat the absence of the initial_source_connection_id transport
-parameter from either endpoint or the absence of the
-original_destination_connection_id transport parameter from the server as a
-connection error of type TRANSPORT_PARAMETER_ERROR.
+* 当没收到重试包时，存在retry_source_connection_id传输参数
 
-An endpoint MUST treat the following as a connection error of type
-TRANSPORT_PARAMETER_ERROR or PROTOCOL_VIOLATION:
+* 从对端收到的传输参数中的值与初始包中对应目的或源连接ID字段中的值不匹配时。
 
-* absence of the retry_source_connection_id transport parameter from the server
-  after receiving a Retry packet,
+如果选择的是0长度的连接ID，对应的传输参数也会包含一个0长度的值。
 
-* presence of the retry_source_connection_id transport parameter when no Retry
-  packet was received, or
 
-* a mismatch between values received from a peer in these transport parameters
-  and the value sent in the corresponding Destination or Source Connection ID
-  fields of Initial packets.
-
-If a zero-length connection ID is selected, the corresponding transport
-parameter is included with a zero-length value.
-
-{{fig-auth-cid}} shows the connection IDs (with DCID=Destination Connection ID,
-SCID=Source Connection ID) that are used in a complete handshake. The exchange
-of Initial packets is shown, plus the later exchange of 1-RTT packets that
-includes the connection ID established during the handshake.
+{{fig-auth-cid}} 显示了完整握手过程中使用的连接ID(其中DID代表目的连接ID，SCID代表源连接ID)。图中展示了初始包的交换，以及后续1-RTT包的交换，这包含了握手过程中连接ID的建立。
 
 ~~~
 Client                                                  Server
@@ -1247,7 +1060,7 @@ Initial: DCID=S1, SCID=C1 ->
 ~~~
 {: #fig-auth-cid title="Use of Connection IDs in a Handshake"}
 
-{{fig-auth-cid-retry}} shows a similar handshake that includes a Retry packet.
+{{fig-auth-cid-retry}} 展示了一个包含重试包的完整握手。
 
 ~~~
 Client                                                  Server
@@ -1262,101 +1075,50 @@ Initial: DCID=S2, SCID=C1 ->
 ~~~
 {: #fig-auth-cid-retry title="Use of Connection IDs in a Handshake with Retry"}
 
-In both cases (Figures {{<fig-auth-cid}} and {{<fig-auth-cid-retry}}), the
-client sets the value of the initial_source_connection_id transport parameter to
-`C1`.
+在这两种情况下（图{{<fig-auth-cid}}和{{<fig-auth-cid-retry}}），客户端将initial_source_connection_id传输参数的值都设置为`C1`。
 
-When the handshake does not include a Retry ({{fig-auth-cid}}), the server sets
-original_destination_connection_id to `S1` (note that this value is chosen by
-the client) and initial_source_connection_id to `S3`. In this case, the server
-does not include a retry_source_connection_id transport parameter.
+在不包含重试包的握手({{fig-auth-cid}})，服务端将original_destination_connection_id设置为`S1`(注意，在这个值是由客户端选择的)，initial_source_connection_id则被设置为`S3`。在这种场景下，服务端不提供retry_source_connection_id传输参数。
 
-When the handshake includes a Retry ({{fig-auth-cid-retry}}), the server sets
-original_destination_connection_id to `S1`, retry_source_connection_id to `S2`,
-and initial_source_connection_id to `S3`.
+当握手包含重试({{fig-auth-cid-retry}})时，服务端将original_destination_connection_id设置为`S1`，retry_source_connection_id设置为`S2`，以及initial_source_connection_id设置为`S3`。
 
 
-## Transport Parameters {#transport-parameters}
+## 传输参数(Transport Parameters) {#transport-parameters}
 
-During connection establishment, both endpoints make authenticated declarations
-of their transport parameters.  Endpoints are required to comply with the
-restrictions that each parameter defines; the description of each parameter
-includes rules for its handling.
+在连接建立过程中，两端对他们的传输参数都会做带认证的声明。终端需要遵循每个参数定义的约束；每个参数的描述中也包含处理它们的规则。
 
-Transport parameters are declarations that are made unilaterally by each
-endpoint.  Each endpoint can choose values for transport parameters independent
-of the values chosen by its peer.
+传输参数是由每个终端单方面的声明的。任一终端可以独立于对端选择的值来设置传输参数的值。
 
-The encoding of the transport parameters is detailed in
-{{transport-parameter-encoding}}.
+传输参数的编码在{{transport-parameter-encoding}}中详细介绍。
 
-QUIC includes the encoded transport parameters in the cryptographic handshake.
-Once the handshake completes, the transport parameters declared by the peer are
-available.  Each endpoint validates the values provided by its peer.
+QUIC在加密握手中包含了编完码的传输参数。一旦握手完成，对端声明的传输参数就可用了。每个终端都会校验对端提供的值。
 
-Definitions for each of the defined transport parameters are included in
-{{transport-parameter-definitions}}.
+每个定义好的传输参数的定义都包含在{transport-parameter-definitions}}中。
 
-An endpoint MUST treat receipt of a transport parameter with an invalid value as
-a connection error of type TRANSPORT_PARAMETER_ERROR.
+终端必须(MUST)将收到无效的传输参数当做TRANSPORT_PARAMETER_ERROR类型的连接错误处理。
 
-An endpoint MUST NOT send a parameter more than once in a given transport
-parameters extension.  An endpoint SHOULD treat receipt of duplicate transport
-parameters as a connection error of type TRANSPORT_PARAMETER_ERROR.
+终端禁止(MUST NOT)在给定的传输参数扩展中多次发送一个参数。终端应当(SHOULD)将收到重复的传输参数当做TRANSPORT_PARAMETER_ERROR类型的连接错误处理。
 
-Endpoints use transport parameters to authenticate the negotiation of
-connection IDs during the handshake; see {{cid-auth}}.
+在握手过程中，终端使用传输参数来验证连接ID的协商，参见{{cid-auth}}。
 
-ALPN (see {{?ALPN=RFC7301}}) allows clients to offer multiple application
-protocols during connection establishment. The transport parameters that a
-client includes during the handshake apply to all application protocols that the
-client offers. Application protocols can recommend values for transport
-parameters, such as the initial flow control limits. However, application
-protocols that set constraints on values for transport parameters could make it
-impossible for a client to offer multiple application protocols if these
-constraints conflict.
+ALPN（见{{?ALPN=RFC7301}}）允许客户端在建立连接时提供多种应用协议。
+客户端在握手过程中提供的传输参数对于客户端提供的所有应用协议都适用。应用协议可以为传输参数提供建议值，比如初始流量控制的限制值。然而，多个应用协议为传输参数设置约束可能导致客户端无法提供多个应用协议，当这些约束冲突时。
 
+### 0-RTT 传输参数的值(Values of Transport Parameters for 0-RTT) {#zerortt-parameters}
 
-### Values of Transport Parameters for 0-RTT {#zerortt-parameters}
+0-RTT的使用需要客户端与服务端都使用之前连接上协商好的传输参数。为了启用0-RTT，终端需要将服务端的传输参数存放在连接上收到的会话凭证(session tickets)上。
+终端还需要存储应用协议或加密握手要求的信息，见{{Section 4.6 of QUIC-TLS}}。当试图通过会话凭证尝试0-RTT时，会使用存储在会话凭证里的传输参数。
 
-Using 0-RTT depends on both client and server using protocol parameters that
-were negotiated from a previous connection.  To enable 0-RTT, endpoints store
-the values of the server transport parameters with any session tickets it
-receives on the connection.  Endpoints also store any information required by
-the application protocol or cryptographic handshake; see {{Section 4.6 of
-QUIC-TLS}}.  The values of stored transport parameters are used when attempting
-0-RTT using the session tickets.
+记忆下来的传输参数对新连接也适用，直到握手完成，客户端开始发送1-RTT包。一旦握手完成，客户端就会使用握手中建立的传输参数。并非所有的传输参数都会被记忆下来，比如一些参数对后续的连接不适用或者它们对0-RTT的使用没有影响。
 
-Remembered transport parameters apply to the new connection until the handshake
-completes and the client starts sending 1-RTT packets.  Once the handshake
-completes, the client uses the transport parameters established in the
-handshake.  Not all transport parameters are remembered, as some do not apply to
-future connections or they have no effect on the use of 0-RTT.
+在定义新的传输参数({{new-transport-parameters}})时，必须(MUST)指定为0-RTT存储这些参数是必须、可选或禁止的。客户端不需要存储一个它无法处理的传输参数。
 
-The definition of a new transport parameter ({{new-transport-parameters}}) MUST
-specify whether storing the transport parameter for 0-RTT is mandatory,
-optional, or prohibited. A client need not store a transport parameter it cannot
-process.
+客户端禁止(MUST NOT)为以下参数使用记忆值：
+ack_delay_exponent, max_ack_delay, initial_source_connection_id, original_destination_connection_id, preferred_address, retry_source_connection_id, 以及 stateless_reset_token。
+客户端必须(MUST)使用服务端在握手中提供的新值替代；如果服务端没有提供新值，则使用默认值。
 
-A client MUST NOT use remembered values for the following parameters:
-ack_delay_exponent, max_ack_delay, initial_source_connection_id,
-original_destination_connection_id, preferred_address,
-retry_source_connection_id, and stateless_reset_token. The client MUST use the
-server's new values in the handshake instead; if the server does not provide new
-values, the default values are used.
+试图发送0-RTT数据的客户端必须(MUST)它能处理的，服务端会使用的所有其他传输参数。服务端可以记住这些传输参数，或者在凭证中完整保护的存储这些值，并在收到0-RTT时恢复这些信息。服务端是否使用这些传输参数取决于是否接受0-RTT数据。
 
-A client that attempts to send 0-RTT data MUST remember all other transport
-parameters used by the server that it is able to process. The server can
-remember these transport parameters or can store an integrity-protected copy of
-the values in the ticket and recover the information when accepting 0-RTT data.
-A server uses the transport parameters in determining whether to accept 0-RTT
-data.
-
-If 0-RTT data is accepted by the server, the server MUST NOT reduce any
-limits or alter any values that might be violated by the client with its
-0-RTT data.  In particular, a server that accepts 0-RTT data MUST NOT set
-values for the following parameters ({{transport-parameter-definitions}})
-that are smaller than the remembered values of the parameters.
+如果服务端接受了0-RTT数据，服务端禁止(MUST NOT)减少任何限制值或者调整任意可能导致违反客户端在0-RTT数据中约束的值。特别是，接收0-RTT数据的服务端不得将以下传输参数({{transport-parameter-definitions}})设置的比记忆下来的值更小。
 
 * active_connection_id_limit
 * initial_max_data
@@ -1366,208 +1128,91 @@ that are smaller than the remembered values of the parameters.
 * initial_max_streams_bidi
 * initial_max_streams_uni
 
-Omitting or setting a zero value for certain transport parameters can result in
-0-RTT data being enabled but not usable.  The applicable subset of transport
-parameters that permit the sending of application data SHOULD be set to non-zero
-values for 0-RTT.  This includes initial_max_data and either (1)
-initial_max_streams_bidi and initial_max_stream_data_bidi_remote or (2)
-initial_max_streams_uni and initial_max_stream_data_uni.
+忽略一些传输参数或者设置成0可能导致0-RTT数据被使能但不可用。对于0-RTT，一些适用于允许发送应用数据的传输参数应当(SHOULD)设置成非0值。
+这包含initial_max_data以及（1）(initial_max_streams_bidi和initial_max_stream_data_bidi_remote) 或 （2）(initial_max_streams_uni和initial_max_stream_data_uni)。
 
-A server might provide larger initial stream flow control limits for streams
-than the remembered values that a client applies when sending 0-RTT.  Once
-the handshake completes, the client updates the flow control
-limits on all sending streams using the updated values of
-initial_max_stream_data_bidi_remote and initial_max_stream_data_uni.
+服务端可以为流提供更大的初始流量控制限制，比客户端在发送0-RTT时应用的记忆值更大。一旦握手完成，客户端使用更新后的initial_max_stream_data_bidi_remote以及initial_max_stream_data_uni来更新所有发送流上的流量控制限制。
 
-A server MAY store and recover the previously sent values of the
-max_idle_timeout, max_udp_payload_size, and disable_active_migration parameters
-and reject 0-RTT if it selects smaller values. Lowering the values of these
-parameters while also accepting 0-RTT data could degrade the performance of the
-connection. Specifically, lowering the max_udp_payload_size could result in
-dropped packets, leading to worse performance compared to rejecting 0-RTT data
-outright.
+服务端可以(MAY)存储和恢复之前发送的max_idle_timeout、max_udp_payload_size以及disable_active_migration参数的值，如果0-RTT中选择了更小的值，则可以拒绝它。
+降低这些参数的值并且接受0-RTT的数据，可能会降低连接的性能够。特别地，降低max_udp_payload_size可能导致丢包，与直接拒绝0-RTT数据相比，接受它可能带来更差的性能。
 
-A server MUST reject 0-RTT data if the restored values for transport
-parameters cannot be supported.
+服务端必须(MUST)拒绝0-RTT数据，当传输参数的存储值无法支持时。
 
-When sending frames in 0-RTT packets, a client MUST only use remembered
-transport parameters; importantly, it MUST NOT use updated values that it learns
-from the server's updated transport parameters or from frames received in 1-RTT
-packets.  Updated values of transport parameters from the handshake apply only
-to 1-RTT packets.  For instance, flow control limits from remembered transport
-parameters apply to all 0-RTT packets even if those values are increased by the
-handshake or by frames sent in 1-RTT packets.  A server MAY treat the use of
-updated transport parameters in 0-RTT as a connection error of type
-PROTOCOL_VIOLATION.
+当在0-RTT数据包中发送帧时，客户端必须(MUST)只使用记忆下来的传输参数；重要的是，它禁止(MUST NOT)使用从服务端更新的传输参数或1-RTT数据包中收到的帧里面的更新值。
+握手过程中的传输参数的更新值，只能用于1-RTT数据包。比如，记忆下来的传输参数中的流量控制限制对于所有的0-RTT包都生效，即使这些限制在握手过程中有增加，或者被1-RTT中发送的帧增加。
+服务端可以(MAY)将在0-RTT中使用更新的传输参数当做PROTOCOL_VIOLATION类型的连接错误处理。
 
+### 新的传输参数(New Transport Parameters) {#new-transport-parameters}
 
-### New Transport Parameters {#new-transport-parameters}
+新的传输参数可以用于协商新协议的行为。终端必须(MUST)忽略它不支持的传输参数。传输参数的缺失会禁用任意需要使用它协商的可选协议特效。如{{transport-parameter-grease}}中所描述，为演练这些要求保留了一些标识符。
 
-New transport parameters can be used to negotiate new protocol behavior.  An
-endpoint MUST ignore transport parameters that it does not support.  The absence
-of a transport parameter therefore disables any optional protocol feature that
-is negotiated using the parameter.  As described in
-{{transport-parameter-grease}}, some identifiers are reserved in order to
-exercise this requirement.
+一个客户端无法理解的传输参数可以被客户端丢弃，且后续连接还是可以尝试0-RTT。然而，如果客户端增加了对丢弃传输参数的支持，那么它尝试0-RTT时可能会有违反这个传输参数建立的约束的风险。通过设置一个最谨慎的默认值，新的传输参数可以避免这个问题发生。客户端通过记忆所有传输参数来避免这个问题，即使有些参数目前不支持。
 
-A client that does not understand a transport parameter can discard it and
-attempt 0-RTT on subsequent connections. However, if the client adds support for
-a discarded transport parameter, it risks violating the constraints that the
-transport parameter establishes if it attempts 0-RTT. New transport parameters
-can avoid this problem by setting a default of the most conservative value.
-Clients can avoid this problem by remembering all parameters, even those not
-currently supported.
+新的传输参数可以按{{iana-transport-parameters}}中定义的规则注册。
 
-New transport parameters can be registered according to the rules in
-{{iana-transport-parameters}}.
+## 加密消息缓存(Cryptographic Message Buffering)
 
+实现需要维护收到的乱序CRYPTO数据的缓存。由于CRYPTO帧没有流量控制，终端可能潜在的迫使对端缓存无限量的数据。
 
-## Cryptographic Message Buffering
+实现必须(MUST)支持为收到的乱序的CRYPTO帧缓存最少4096字节。终端可以(MAY)选择在握手期间允许更多的数据被缓存。
+握手期间，更大的限制允许去交换更大的秘钥或证书。终端的缓冲区大小不需要再整个连接生命周期保持不变。
 
-Implementations need to maintain a buffer of CRYPTO data received out of order.
-Because there is no flow control of CRYPTO frames, an endpoint could
-potentially force its peer to buffer an unbounded amount of data.
+在握手期间，无法缓存CRYPTO帧会导致连接失败。如果终端的缓冲区在握手期间被耗尽，它可以临时的扩大缓存区去完成握手。如果这时终端不扩大缓存区，它必须(MUST)使用CRYPTO_BUFFER_EXCEEDED错误码来关闭连接。
 
-Implementations MUST support buffering at least 4096 bytes of data received in
-out-of-order CRYPTO frames. Endpoints MAY choose to allow more data to be
-buffered during the handshake. A larger limit during the handshake could allow
-for larger keys or credentials to be exchanged. An endpoint's buffer size does
-not need to remain constant during the life of the connection.
+一旦握手完成，如果终端无法缓存CRYPTO帧中的所有数据，它可以(MAY)丢弃这个CRYPTO帧，以及未来收到的所有CRYPTO帧，或者它可以(MAY)使用CRYPTO_BUFFER_EXCEEDED错误码来关闭连接。
+如果一个数据包包含了被丢弃的CRYPTO帧，那么它必须(MUST)被确认，因为即使CRYPTO帧会被丢弃，数据包也被传输协议接收处理了。
 
-Being unable to buffer CRYPTO frames during the handshake can lead to a
-connection failure. If an endpoint's buffer is exceeded during the handshake, it
-can expand its buffer temporarily to complete the handshake. If an endpoint
-does not expand its buffer, it MUST close the connection with a
-CRYPTO_BUFFER_EXCEEDED error code.
+# 地址校验(Address Validation) {#address-validation}
 
-Once the handshake completes, if an endpoint is unable to buffer all data in a
-CRYPTO frame, it MAY discard that CRYPTO frame and all CRYPTO frames received in
-the future, or it MAY close the connection with a CRYPTO_BUFFER_EXCEEDED error
-code. Packets containing discarded CRYPTO frames MUST be acknowledged because
-the packet has been received and processed by the transport even though the
-CRYPTO frame was discarded.
+地址校验确保终端无法被用作流量放大攻击。在这种攻击场景下，发送给服务端的包会携带代表受害者的虚假源地址信息。对于这种包，如果服务端在响应中生成了更多或更大的包，攻击者就可以利用服务器向受害者发送比它自己能发送数据更多的数据。
 
+应答放大攻击最主要的防御就是验证对端是否能在它声明的传输地址上接收数据包。因此，在一个未验证的地址上收到数据包后，终端必须(MUST)限制它发送给未验证地址的数据量，最多是它在这地址上收到数据量的三倍。对应答的大小进行限制被称为反放大限制。
 
-# Address Validation {#address-validation}
+地址校验在连接建立(见{{validate-handshake}})以及连接迁移 (见{{migrate-validate}})时都会执行。
 
-Address validation ensures that an endpoint cannot be used for a traffic
-amplification attack.  In such an attack, a packet is sent to a server with
-spoofed source address information that identifies a victim.  If a server
-generates more or larger packets in response to that packet, the attacker can
-use the server to send more data toward the victim than it would be able to send
-on its own.
+## 连接建立期间的地址校验(Address Validation during Connection Establishment) {#validate-handshake}
 
-The primary defense against amplification attacks is verifying that a peer is
-able to receive packets at the transport address that it claims.  Therefore,
-after receiving packets from an address that is not yet validated, an endpoint
-MUST limit the amount of data it sends to the unvalidated address to three times
-the amount of data received from that address.  This limit on the size of
-responses is known as the anti-amplification limit.
+连接的建立隐含的为两端提供了地址校验。特别地，收到一个使用握手密钥保护的数据包就可以确认对端已经成功的处理了初始报文。
+一旦终端成功的处理了对端发送的握手包，它可以认为对端的地址已经得到了验证。
 
-Address validation is performed both during connection establishment (see
-{{validate-handshake}}) and during connection migration (see
-{{migrate-validate}}).
+此外，如果对端使用了由本端选择的连接ID且连接ID包含至少64比特的信息，终端可以(MAY)认为对端的地址得到了验证。
 
+对于客户端来说，它第一个初始包中的目的连接ID的值可以允许它校验服务端的地址，包含在数据包的正确处理流程中。来自服务端的初始包是由这个连接ID衍生出来的密钥保护的（见{{Section 5.2 of QUIC-TLS}}）。
+另外，这个连接ID也会在服务端的版本协商包({{version-negotiation}})中回显或在重试包完整性标签中包含({{Section 5.8 of QUIC-TLS}})。
 
-## Address Validation during Connection Establishment {#validate-handshake}
+在校验客户端地址之前，服务端禁止(MUST NOT)发送超过三倍于它接收的字节。这限制了使用任何伪造源地址进行放大攻击的规模。
+为了避免在地址验证之前被放大攻击，服务端必须(MUST)必须统计归属于单个连接的报文中接收到的载荷字节数。这包括包含包已经被成功处理的报文与包含全部包都被丢弃的报文。
 
-Connection establishment implicitly provides address validation for both
-endpoints.  In particular, receipt of a packet protected with Handshake keys
-confirms that the peer successfully processed an Initial packet.  Once an
-endpoint has successfully processed a Handshake packet from the peer, it can
-consider the peer address to have been validated.
+客户端必须(MUST)确保包含初始包的UDP报文中至少有1200字节的UDP载荷，必要时可以添加PADDING帧。客户端发送填充报文可以使服务端在地址验证完成前发送更多的数据。
 
-Additionally, an endpoint MAY consider the peer address validated if the peer
-uses a connection ID chosen by the endpoint and the connection ID contains at
-least 64 bits of entropy.
+如果客户端不发送额外的初始或握手包，那么服务端的初始或握手包丢失时会导致死锁。死锁也可能发生在当服务端达到了反-放大限制，且客户端发送的数据都被确认时。
+在这种场景下，如果客户端没有理由去发送额外的包，服务端也不能发送更多数据，因为它还没完成客户端地址的校验。为了避免这种死锁，客户端必须(MUST)在探测超时(PTO)时发送数据包，参考{{Section 6.2 of QUIC-RECOVERY}}。
+具体而言，客户端必须(MUST)在它没有握手密钥时发送初始包，初始包包含在一个最少具有1200字节载荷的UDP报文中；否则就发送一个握手包。
 
-For the client, the value of the Destination Connection ID field in its first
-Initial packet allows it to validate the server address as a part of
-successfully processing any packet. Initial packets from the server are
-protected with keys that are derived from this value (see {{Section 5.2 of
-QUIC-TLS}}). Alternatively, the value is echoed by the server in Version
-Negotiation packets ({{version-negotiation}}) or included in the Integrity Tag
-in Retry packets ({{Section 5.8 of QUIC-TLS}}).
+服务端可能希望在加密握手前校验客户端的地址。QUIC在初始包中使用了一个令牌，在完成握手之前提供地址校验。这个令牌在连接建立过程中通过重试包(见 {{validate-retry}}) 或在之前的连接中使用NEW_TOKEN帧(see {{validate-future}})传递给客户端。
 
-Prior to validating the client address, servers MUST NOT send more than three
-times as many bytes as the number of bytes they have received.  This limits the
-magnitude of any amplification attack that can be mounted using spoofed source
-addresses.  For the purposes of avoiding amplification prior to address
-validation, servers MUST count all of the payload bytes received in datagrams
-that are uniquely attributed to a single connection. This includes datagrams
-that contain packets that are successfully processed and datagrams that contain
-packets that are all discarded.
+除了在地址校验前被施加发送限制外，服务端也被拥塞控制器限制，它能发送什么。客户端仅被拥塞控制器限制。
 
-Clients MUST ensure that UDP datagrams containing Initial packets have UDP
-payloads of at least 1200 bytes, adding PADDING frames as necessary.
-A client that sends padded datagrams allows the server to
-send more data prior to completing address validation.
+### 令牌构成(Token Construction) {#token-differentiation}
 
-Loss of an Initial or Handshake packet from the server can cause a deadlock if
-the client does not send additional Initial or Handshake packets. A deadlock
-could occur when the server reaches its anti-amplification limit and the client
-has received acknowledgments for all the data it has sent.  In this case, when
-the client has no reason to send additional packets, the server will be unable
-to send more data because it has not validated the client's address. To prevent
-this deadlock, clients MUST send a packet on a Probe Timeout (PTO); see
-{{Section 6.2 of QUIC-RECOVERY}}. Specifically, the client MUST send an Initial
-packet in a UDP datagram that contains at least 1200 bytes if it does not have
-Handshake keys, and otherwise send a Handshake packet.
+在NEW_TOKEN帧或重试包中发送的令牌必须(MUST)以允许服务器识别它是如何被提供给客户端的方式构建。这些令牌被携带在相同的字段中，但是需要按不同服务端要求的方式进行不同的处理。
 
-A server might wish to validate the client address before starting the
-cryptographic handshake. QUIC uses a token in the Initial packet to provide
-address validation prior to completing the handshake. This token is delivered to
-the client during connection establishment with a Retry packet (see
-{{validate-retry}}) or in a previous connection using the NEW_TOKEN frame (see
-{{validate-future}}).
+### 使用重试包进行地址校验(Address Validation Using Retry Packets) {#validate-retry}
 
-In addition to sending limits imposed prior to address validation, servers are
-also constrained in what they can send by the limits set by the congestion
-controller.  Clients are only constrained by the congestion controller.
+在收到客户端的初始包后，服务端可以通过在重试包({{packet-retry}})中携带一个令牌来请求地址校验。客户端在收到重试包之后，必须(MUST)在为该连接发送的所有初始包中反复携带这个令牌。
 
+在对包含重试包中提供的令牌的初始包的响应时，服务端不能再发送其他重试包，它只能拒绝连接或者允许连接继续。
 
-### Token Construction {#token-differentiation}
+只要攻击者不可能为它的地址生成一个有效的令牌(参考{{token-integrity}}) ，并且客户端有能力返回这个令牌，就能向服务端证明它收到了这个令牌。
 
-A token sent in a NEW_TOKEN frame or a Retry packet MUST be constructed in a
-way that allows the server to identify how it was provided to a client.  These
-tokens are carried in the same field but require different handling from
-servers.
+服务端也可以使用重试包来推迟连接建立的状态与处理成本。
+通过要求服务端提供一个不同的连接ID，以及提供按{{transport-parameter-definitions}}中定义的original_destination_connection_id传输参数，迫使服务端或者合作的实体去证明他们收到了来自客户端的原始初始包。
+提供一个不同的连接ID也可以让服务端可以控制后续的数据包的路由。这可以用来将连接引导到一个不同的服务器实例。
 
+如果服务器收到客户端的有效初始包中包含了无效的重试令牌，它可以知道客户端将不接受其他重试令牌。服务端可以丢弃这种包，让客户端通过超时来检测到握手失败，但这可能给客户端带来较大的延迟惩罚。
+取而代之的，服务端应当(SHOULD)通过INVALID_TOKEN错误立即关闭({{immediate-close}})连接。请注意，此时服务端还没有为连接建立任何状态，因此不会进入关闭周期。
 
-### Address Validation Using Retry Packets {#validate-retry}
-
-Upon receiving the client's Initial packet, the server can request address
-validation by sending a Retry packet ({{packet-retry}}) containing a token. This
-token MUST be repeated by the client in all Initial packets it sends for that
-connection after it receives the Retry packet.
-
-In response to processing an Initial packet containing a token that was provided
-in a Retry packet, a server cannot send another Retry packet; it can only refuse
-the connection or permit it to proceed.
-
-As long as it is not possible for an attacker to generate a valid token for
-its own address (see {{token-integrity}}) and the client is able to return
-that token, it proves to the server that it received the token.
-
-A server can also use a Retry packet to defer the state and processing costs of
-connection establishment. Requiring the server to provide a different
-connection ID, along with the original_destination_connection_id transport
-parameter defined in {{transport-parameter-definitions}}, forces the server to
-demonstrate that it, or an entity it cooperates with, received the original
-Initial packet from the client. Providing a different connection ID also grants
-a server some control over how subsequent packets are routed. This can be used
-to direct connections to a different server instance.
-
-If a server receives a client Initial that contains an invalid Retry token but
-is otherwise valid, it knows the client will not accept another Retry token.
-The server can discard such a packet and allow the client to time out to
-detect handshake failure, but that could impose a significant latency penalty on
-the client.  Instead, the server SHOULD immediately close ({{immediate-close}})
-the connection with an INVALID_TOKEN error.  Note that a server has not
-established any state for the connection at this point and so does not enter the
-closing period.
-
-A flow showing the use of a Retry packet is shown in {{fig-retry}}.
+在{{fig-retry}}中展示了一个使用重试包的流程。
 
 ~~~~
 Client                                                  Server
@@ -1585,719 +1230,353 @@ Initial+Token[1]: CRYPTO[CH] ->
 {: #fig-retry title="Example Handshake with Retry"}
 
 
-### Address Validation for Future Connections {#validate-future}
+### 为后续连接提供地址校验(Address Validation for Future Connections) {#validate-future}
 
-A server MAY provide clients with an address validation token during one
-connection that can be used on a subsequent connection.  Address validation is
-especially important with 0-RTT because a server potentially sends a significant
-amount of data to a client in response to 0-RTT data.
+服务端可以(MAY)在一条连接上为客户端提供的地址校验令牌，在后续连接上也能使用。地址校验对0-RTT来说非常重要，因为服务端可能在0-RTT数据的响应中向客户端发送大量的数据。
 
-The server uses the NEW_TOKEN frame ({{frame-new-token}}) to provide the client
-with an address validation token that can be used to validate future
-connections.  In a future connection, the client includes this token in Initial
-packets to provide address validation.  The client MUST include the token in all
-Initial packets it sends, unless a Retry replaces the token with a newer one.
-The client MUST NOT use the token provided in a Retry for future connections.
-Servers MAY discard any Initial packet that does not carry the expected token.
+服务端使用NEW_TOKEN帧({{frame-new-token}})为客户端提供了一个地址校验令牌。在后续的连接上，客户端可以在初始包中包含这个令牌来提供地址校验。
+客户端必须(MUST)在它发送的所有初始包中都包含这个令牌，除非重传包将令牌替换成新的。客户端禁止(MUST)将重试包中提供的令牌用于后续的连接上。服务端可以(MAY)丢弃任意没有携带期望令牌的初始包。
 
-Unlike the token that is created for a Retry packet, which is used immediately,
-the token sent in the NEW_TOKEN frame can be used after some period of
-time has passed.  Thus, a token SHOULD have an expiration time, which could
-be either an explicit expiration time or an issued timestamp that can be
-used to dynamically calculate the expiration time.  A server can store the
-expiration time or include it in an encrypted form in the token.
+与为重试包创建的令牌不同，重试包的令牌是紧邻使用的，在NEW_TOKEN帧中发送的令牌在一段时间内都可用。因此，令牌应当(SHOULD)有一个失效时间，可以使明确的过期时间，或者一个用于动态计算失效时间的发布时间戳。
+服务端可以存储过期时间，或者以加密的形式包含在令牌中。
 
-A token issued with NEW_TOKEN MUST NOT include information that would allow
-values to be linked by an observer to the connection on which it was
-issued. For example, it cannot include the previous connection ID or addressing
-information, unless the values are encrypted.  A server MUST ensure that
-every NEW_TOKEN frame it sends is unique across all clients, with the exception
-of those sent to repair losses of previously sent NEW_TOKEN frames.  Information
-that allows the server to distinguish between tokens from Retry and NEW_TOKEN
-MAY be accessible to entities other than the server.
+NEW_TOKEN帧签发的令牌禁止(MUST NOT)包含允许观察者将令牌的值与签发令牌的连接联系起来的信息。例如，它不能包含以前的连接ID或地址信息，除非这些值是加密的。
+服务端必须(MUST)确保它发送的每个NEW_TOKEN在所有客户端上都是唯一的，但那些为了恢复先前丢失的NEW_TOKEN帧的发送例外。允许服务端区分令牌是来自重试包或NET_TOKEN帧的信息，可以被除服务器外的其他实体所访问。
 
-It is unlikely that the client port number is the same on two different
-connections; validating the port is therefore unlikely to be successful.
+客户端端口在两条不同连接上大概率是不同的，因此端口的校验大概率会失败。
 
-A token received in a NEW_TOKEN frame is applicable to any server that the
-connection is considered authoritative for (e.g., server names included in the
-certificate).  When connecting to a server for which the client retains an
-applicable and unused token, it SHOULD include that token in the Token field of
-its Initial packet.  Including a token might allow the server to validate the
-client address without an additional round trip.  A client MUST NOT include a
-token that is not applicable to the server that it is connecting to, unless the
-client has the knowledge that the server that issued the token and the server
-the client is connecting to are jointly managing the tokens.  A client MAY use a
-token from any previous connection to that server.
+在NEW_TOKEN帧中收到的令牌适用于当前连接认为是权威的任何服务器(比如， 在证书中包含的服务器名称)。当连接服务端时，如果客户端保存了适用但未使用的令牌，它应当(SHOULD)在它初始包的令牌字段里面包含这个令牌。
+包含的令牌使得服务端不需要额外的往返行程即可校验客户端地址。客户端禁止(MUST NOT)使用不适用于它所连接的服务器的令牌，除非客户端知道发出令牌的服务器和客户端所连接的服务器正在共同管理令牌。
+客户端可以使用以前连接到该服务器的令牌。
 
-A token allows a server to correlate activity between the connection where the
-token was issued and any connection where it is used.  Clients that want to
-break continuity of identity with a server can discard tokens provided using the
-NEW_TOKEN frame.  In comparison, a token obtained in a Retry packet MUST be used
-immediately during the connection attempt and cannot be used in subsequent
-connection attempts.
+令牌允许服务器把发出令牌的连接与任何使用它的连接关联起来。想打破在服务端身份连续性的客户端可以丢弃使用NEW_TOKEN帧中提供的令牌。
+相比之下，重试包中包含的令牌必须(MUST)在连接尝试中立即使用，并且不能用于后续的连接尝试。
 
-A client SHOULD NOT reuse a token from a NEW_TOKEN frame for different
-connection attempts.  Reusing a token allows connections to be linked by
-entities on the network path; see {{migration-linkability}}.
+客户端不应当(SHOULD NOT)在不同的连接尝试中复用NEW_TOKEN中的令牌。重复使用令牌可以使在网络路径上的实体关联出这些连接的关系，参考{{migration-linkability}}。
 
-Clients might receive multiple tokens on a single connection.  Aside from
-preventing linkability, any token can be used in any connection attempt.
-Servers can send additional tokens to either enable address validation for
-multiple connection attempts or replace older tokens that might become invalid.
-For a client, this ambiguity means that sending the most recent unused token is
-most likely to be effective.  Though saving and using older tokens have no
-negative consequences, clients can regard older tokens as being less likely to
-be useful to the server for address validation.
+客户端可能在一个连接上收到多个令牌。除了防止被关联外，每个令牌都可以在任意连接尝试中使用。服务端可以发送额外的令牌去为多个连接尝试进行地址验证，或者替换一个可能变得无效的旧令牌。
+对于客户端来说，这种模糊性意味着发送最近未被使用的令牌可能是最有效的。尽管保存和使用旧的令牌可能没有负面影响，但客户端可以认为旧令牌对服务器做地址校验可能不太有用。
 
-When a server receives an Initial packet with an address validation token, it
-MUST attempt to validate the token, unless it has already completed address
-validation.  If the token is invalid, then the server SHOULD proceed as if the
-client did not have a validated address, including potentially sending a Retry
-packet.  Tokens provided with NEW_TOKEN frames and Retry packets can be
-distinguished by servers (see {{token-differentiation}}), and the latter can be
-validated more strictly.  If the validation succeeds, the server SHOULD then
-allow the handshake to proceed.
+当服务端收到了含有地址校验令牌的初始包，它必须(MUST)尝试校验这个令牌，除非已经完成了地址校验。如果令牌无效，服务端应当(SHOULD)把客户端按没有验证地址处理，包括可能发送一个重试包。
+NEW_TOKEN帧与重试包中的TOKEN可以被服务端区分(见{{token-differentiation}})，后者可能会更严格的校验。如果校验成功，服务端应当(SHOULD)允许握手继续进行。
 
 <aside markdown="block">
-Note: The rationale for treating the client as unvalidated rather than
-  discarding the packet is that the client might have received the token in a
-  previous connection using the NEW_TOKEN frame, and if the server has lost
-  state, it might be unable to validate the token at all, leading to connection
-  failure if the packet is discarded.
+
+注意：将客户端当做未校验处理而不是丢弃数据包是因为，客户端可能在以前连接的NEW_TOKEN帧上收到了令牌，当服务端丢失状态后，它可能完全无法验证这个令牌，如果丢包就会导致连接失败。
 </aside>
 
-In a stateless design, a server can use encrypted and authenticated tokens to
-pass information to clients that the server can later recover and use to
-validate a client address.  Tokens are not integrated into the cryptographic
-handshake, and so they are not authenticated.  For instance, a client might be
-able to reuse a token.  To avoid attacks that exploit this property, a server
-can limit its use of tokens to only the information needed to validate client
-addresses.
+在无状态设计中，服务端可以使用加密认证的令牌将信息传递给客户端，服务端随后可以从令牌中恢复信息并用来校验客户端地址。令牌是没有整合到加密握手中，因此他们是没有认证的。例如，客户端可能重复使用同个令牌。为了避免利用这个特定的攻击，服务端可以限制令牌使用中只包含验证客户端地址需要的信息。
 
-Clients MAY use tokens obtained on one connection for any connection attempt
-using the same version.  When selecting a token to use, clients do not need to
-consider other properties of the connection that is being attempted, including
-the choice of possible application protocols, session tickets, or other
-connection properties.
+客户端可以(MAY)将在一个连接上获得的令牌用于任意使用相同版本的连接尝试。在选择要使用的令牌时，客户端不需要考虑正在尝试连接上其他的属性，比如应用协议、会话凭证，或其他连接属性的选择。
 
+### 地址校验令牌完整性(Address Validation Token Integrity) {#token-integrity}
 
-### Address Validation Token Integrity {#token-integrity}
+地址校验的令牌必须(MUST)是难以猜测的。在令牌的随机值中包含最少128位信息就足够了，不过这取决于服务端是否能记住它发给客户端的值。
 
-An address validation token MUST be difficult to guess.  Including a random
-value with at least 128 bits of entropy in the token would be sufficient, but
-this depends on the server remembering the value it sends to clients.
+一个基于令牌的方案可以使得服务端将校验有关的状态卸载给客户端。为了使这种设计发挥作用，令牌必须(MUST)被完整的保护，以防止客户端的修改或伪造。如果没有完整性保护，恶意的客户端可以生成或猜测服务端会接受的令牌值。只有服务端需要访问为令牌完整性提供保护的密钥。
 
-A token-based scheme allows the server to offload any state associated with
-validation to the client.  For this design to work, the token MUST be covered by
-integrity protection against modification or falsification by clients.  Without
-integrity protection, malicious clients could generate or guess values for
-tokens that would be accepted by the server.  Only the server requires access to
-the integrity protection key for tokens.
+因为服务端即生成令牌也消费它，所以没必要为令牌指提供明确定义的格式。重试包中发送的令牌应当(SHOULD)包含允许服务端校验客户端源IP地址与端口的固定信息。
 
-There is no need for a single well-defined format for the token because the
-server that generates the token also consumes it.  Tokens sent in Retry packets
-SHOULD include information that allows the server to verify that the source IP
-address and port in client packets remain constant.
+在NEW_TOKEN帧中发送的令牌必须(MUST)包含信息，允许服务端去验证客户端的IP地址与令牌生成时相比没发生变化。服务端能够使用NEW_TOKEN帧中的令牌来决定不发送重试包，即使客户端地址已经变化。
+如果客户端IP地址发生了变化，服务端必须遵守反放大的限制；参考{{address-validation}}。注意，在存在NAT的情况下，这一要求可能无法保护其他使用共享NAT的主机免受防放大攻击。
 
-Tokens sent in NEW_TOKEN frames MUST include information that allows the server
-to verify that the client IP address has not changed from when the token was
-issued. Servers can use tokens from NEW_TOKEN frames in deciding not to send a
-Retry packet, even if the client address has changed. If the client IP address
-has changed, the server MUST adhere to the anti-amplification limit; see
-{{address-validation}}.  Note that in the presence of NAT, this requirement
-might be insufficient to protect other hosts that share the NAT from
-amplification attacks.
+攻击者可以重放令牌，将服务端用作DDOS攻击的放大器。为了防止这种攻击，服务端必须(MUST)确保可以防止或限制重放令牌。服务端应当(SHOULD)确保在重试包中发送的令牌只在很短的一段时间内才被接受，因为它们会立即被客户端返回。
+在NEW_TOKEN帧({{frame-new-token}})中提供的令牌需要有较长的有效期，但不应当(SHOULD NOT)多次被接受。如果可能的话，鼓励服务端只允许令牌被使用一次；令牌可以(MAY)包含关于客户端的额外信息，以进一步缩小令牌的适用范围或重用。
 
-Attackers could replay tokens to use servers as amplifiers in DDoS attacks. To
-protect against such attacks, servers MUST ensure that replay of tokens is
-prevented or limited. Servers SHOULD ensure that tokens sent in Retry packets
-are only accepted for a short time, as they are returned immediately by clients.
-Tokens that are provided in NEW_TOKEN frames ({{frame-new-token}}) need to be
-valid for longer but SHOULD NOT be accepted multiple times. Servers are
-encouraged to allow tokens to be used only once, if possible; tokens MAY include
-additional information about clients to further narrow applicability or reuse.
+## 路径校验(Path Validation) {#migrate-validate}
 
+在连接迁移过程中(参考{{migration}})，路径校验被用于两端在地址改变后校验可达性。在路径校验中，终端会测试指定本地地址与指定对端地址间的可达性，地址是IP地址与端口的二元组。
 
-## Path Validation {#migrate-validate}
+路径校验测试在一条路径上，发给对端的数据包是否被对端接收。路径校验用于确保数据包是从一个迁移的对端上收到的，并且未携带伪造的源地址。
 
-Path validation is used by both peers during connection migration
-(see {{migration}}) to verify reachability after a change of address.
-In path validation, endpoints test reachability between a specific local
-address and a specific peer address, where an address is the 2-tuple of
-IP address and port.
+路径校验不会校验对端能否在回程方向上发送。确认(包？)不能用于证明回程路径的校验，因此它包含的信息不够，可能会被欺骗。终端在每个方向的可达性是分别确定的，因此回程的可达性只能由对端去建立。
 
-Path validation tests that packets sent on a path to a peer are
-received by that peer. Path validation is used to ensure that packets received
-from a migrating peer do not carry a spoofed source address.
+路径校验可以在任意时刻被任意终端使用。比如，终端可能会检查对端在静止一段时间后是否仍拥有它的地址。
 
-Path validation does not validate that a peer can send in the return direction.
-Acknowledgments cannot be used for return path validation because they contain
-insufficient entropy and might be spoofed. Endpoints independently determine
-reachability on each direction of a path, and therefore return reachability can
-only be established by the peer.
+路径校验不是作为一种NAT的穿越机制而设计的。尽管这里描述的机制对于支持NAT穿越的NAT绑定创建可能有帮助，但期望一个终端在路径上发送数据包前就可以接收数据包。有效的NAT穿越需要额外的同步机制，这里没有提供。
 
-Path validation can be used at any time by either endpoint.  For instance, an
-endpoint might check that a peer is still in possession of its address after a
-period of quiescence.
+终端可以(MAY)将用于路径校验的PATH_CHALLENGE帧与PATH_RESPONSE帧与其他帧包含在一起。特别地，终端可以将PATH_CHALLENGE帧与PADDING帧包含在一起，用于路径最大传输单元发现(PMTUD); 参考 {{pmtud}}。
+终端在发送PATH_RESPONSE帧时也可以包含它的PATH_CHALLENGE帧。
 
-Path validation is not designed as a NAT traversal mechanism. Though the
-mechanism described here might be effective for the creation of NAT bindings
-that support NAT traversal, the expectation is that one endpoint is able to
-receive packets without first having sent a packet on that path. Effective NAT
-traversal needs additional synchronization mechanisms that are not provided
-here.
+终端会使用新的连接ID在从新的本地地址发送探测时，参考{{migration-linkability}}。当探测一个新路径时，终端可以认为对端有未使用的连接ID供响应。
+如果对端的active_connection_id_limit允许，可以在同个包中发送NEW_CONNECTION_ID与PATH_CHALLENGE帧，确保对端在发送响应时有未使用的连接ID。
 
-An endpoint MAY include other frames with the PATH_CHALLENGE and PATH_RESPONSE
-frames used for path validation.  In particular, an endpoint can include PADDING
-frames with a PATH_CHALLENGE frame for Path Maximum Transmission Unit Discovery
-(PMTUD); see {{pmtud}}. An endpoint can also include its own PATH_CHALLENGE
-frame when sending a PATH_RESPONSE frame.
+终端可以选择同时探测多条路径。同时探测的路径数量受限于对端先前提供的额外连接ID数量，因为用于探测的每个新的本地地址都需要有一个先前未使用的连接ID。
 
-An endpoint uses a new connection ID for probes sent from a new local address;
-see {{migration-linkability}}.  When probing a new path, an endpoint can
-ensure that its peer has an unused connection ID available for
-responses. Sending NEW_CONNECTION_ID and PATH_CHALLENGE frames in the same
-packet, if the peer's active_connection_id_limit permits, ensures that an unused
-connection ID will be available to the peer when sending a response.
+### 发起路径校验(Initiating Path Validation)
 
-An endpoint can choose to simultaneously probe multiple paths. The number of
-simultaneous paths used for probes is limited by the number of extra connection
-IDs its peer has previously supplied, since each new local address used for a
-probe requires a previously unused connection ID.
+为了发起路径验证，终端在需要验证的路径上发送一个包含不可预测载荷的PATH_CHALLENGE帧。
 
-### Initiating Path Validation
+终端可以(MAY)发送多个PATH_CHALLENGE帧去防止包丢失。不过，终端不应当(SHOULD NOT)在单个包上发送多个PATH_CHALLENGE帧。
 
-To initiate path validation, an endpoint sends a PATH_CHALLENGE frame containing
-an unpredictable payload on the path to be validated.
+终端不应当(SHOULD NOT)超过它发送初始包频率的发送包含PATH_CHALLENGE帧的包去探测新路径。这确保连接迁移对新路径的负载不会超过建立一条新连接。
 
-An endpoint MAY send multiple PATH_CHALLENGE frames to guard against packet
-loss. However, an endpoint SHOULD NOT send multiple PATH_CHALLENGE frames in a
-single packet.
+终端必须(MUST)在每个PATH_CHALLENGE帧中都使用不可预测的数据，以便它能将对端的响应与对应的PATH_CHALLENGE关联起来。
 
-An endpoint SHOULD NOT probe a new path with packets containing a PATH_CHALLENGE
-frame more frequently than it would send an Initial packet. This ensures that
-connection migration is no more load on a new path than establishing a new
-connection.
+终端必须(MUST)扩展包含PATH_CHALLENGE帧的报文到最少允许1200字节的最大报文大小，除非路径的反放大限制不允许发送这个大小的报文。
+发送这个大小的UDP报文可以确保从终端到对端的网络路径可以用于QUIC；见{{datagram-size}}。
 
-The endpoint MUST use unpredictable data in every PATH_CHALLENGE frame so that
-it can associate the peer's response with the corresponding PATH_CHALLENGE.
+当终端由于反放大限制无法扩展报文大小到1200字节时，路径MTU不会得到校验。为了确保路径MTU足够大，终端必须(MUST)通过发送一个包含PATH_CHALLENGE帧且最少1200字节的报文来进行第二次路径校验。
+这个额外的验证可以在成功收到PATH_RESPONSE之后进行，或者当在这条路径上收到了足够多的字节使得发送更大的报文不会导致超过反放大限制时进行。
 
-An endpoint MUST expand datagrams that contain a PATH_CHALLENGE frame to at
-least the smallest allowed maximum datagram size of 1200 bytes, unless the
-anti-amplification limit for the path does not permit sending a datagram of
-this size.  Sending UDP datagrams of this size ensures that the network path
-from the endpoint to the peer can be used for QUIC; see {{datagram-size}}.
+与其他扩大报文的情况不同，当报文包含PATH_CHALLENGE或PATH_RESPONSE时，终端禁止(MUST NOT)丢弃那些看起来太小的报文。
 
-When an endpoint is unable to expand the datagram size to 1200 bytes due to the
-anti-amplification limit, the path MTU will not be validated.  To ensure that
-the path MTU is large enough, the endpoint MUST perform a second path validation
-by sending a PATH_CHALLENGE frame in a datagram of at least 1200 bytes.  This
-additional validation can be performed after a PATH_RESPONSE is successfully
-received or when enough bytes have been received on the path that sending the
-larger datagram will not result in exceeding the anti-amplification limit.
+### 路径校验响应(Path Validation Responses)
 
-Unlike other cases where datagrams are expanded, endpoints MUST NOT discard
-datagrams that appear to be too small when they contain PATH_CHALLENGE or
-PATH_RESPONSE.
+当收到一个PATH_CHALLENGE帧时，终端必须(MUST)按照将PATH_CHALLENGE帧中包含的数据放在PATH_RESPONSE帧中回显的方式来响应。
+除非被拥塞控制限制，终端禁止(MUST NOT)推迟传输包含PATH_RESPONSE帧的包。
+
+PATH_RESPONSE帧必须(MUST)在收到PATH_CHALLENGE帧的网络路径上发送。这可以保证对端的路径校验只有当两个方向上都正常时才成功。
+这个约束禁止(MUST NOT)由发起路径校验的终端执行，因为这会导致对迁移的攻击；详见{{off-path-forward}}。
+
+终端必须(MUST)将包含PATH_RESPONSE帧的报文扩展到最少允许1200字节的最大报文大小。这确认了路径上两个方向都可以承载这个大小的报文。
+然而，如果产生的数据超过了反-放大限制，终端禁止(MUST NOT)将扩展包含PATH_RESPONSE的报文。
+预期只有收到的PATH_CHALLENGE帧没有放在扩展的报文中发送时才会发生。
+
+终端禁止(MUST NOT)在给PATH_CHALLENGE帧的响应中发送一个以上的PATH_RESPONSE帧；见{{retransmission-of-information}}。
+对端如果需要唤起额外的PATH_RESPONSE帧时，预期是通过发送更多的PATH_CHALLENGE帧。
+
+### 成功的路径校验(Successful Path Validation)
+
+当收到的PATH_RESPONSE帧中包含先前PATH_CHALLENGE帧中发送的数据时，路径校验成功。在任何网络路径上收到的PATH_RESPONSE帧都能校验发送PATH_CHALLENGE帧的路径。
+
+如果终端在一个没有扩展到最少1200字节的报文中发送了PATH_CHALLENGE帧，且如果对它的响应验证了对端地址，路径有被验证，但路径MTU没有。结果是，终端现在可以发送超过三倍于收到的数据量。
+然而，终端必须(MUST)使用扩展大小的报文发起另一个路径校验来验证路径支持要求的MTU。
+
+收到对包的确认中包含PATH_CHALLENGE帧并不是充分的验证，因为这个确认可能是恶意对端的欺骗。
 
 
-### Path Validation Responses
+### 失败的路径校验(Failed Path Validation)
 
-On receiving a PATH_CHALLENGE frame, an endpoint MUST respond by echoing the
-data contained in the PATH_CHALLENGE frame in a PATH_RESPONSE frame.  An
-endpoint MUST NOT delay transmission of a packet containing a PATH_RESPONSE
-frame unless constrained by congestion control.
+只有当试图校验路径的终端放弃尝试校验路径时，路径校验才会失败。
 
-A PATH_RESPONSE frame MUST be sent on the network path where the PATH_CHALLENGE
-frame was received.  This ensures that path validation by a peer only succeeds
-if the path is functional in both directions.  This requirement MUST NOT be
-enforced by the endpoint that initiates path validation, as that would enable an
-attack on migration; see {{off-path-forward}}.
+终端应当(SHOULD)基于定时器来放弃路径校验。当设置定时器时，实现时要注意，新路径的往返时间可能比原来的路径更长。
+推荐使用三倍于当前PTO大小的值或者新路径PTO(使用kInitialRtt，如{{QUIC-RECOVERY}}中所定义)。
 
-An endpoint MUST expand datagrams that contain a PATH_RESPONSE frame to at
-least the smallest allowed maximum datagram size of 1200 bytes. This verifies
-that the path is able to carry datagrams of this size in both directions.
-However, an endpoint MUST NOT expand the datagram containing the PATH_RESPONSE
-if the resulting data exceeds the anti-amplification limit. This is expected to
-only occur if the received PATH_CHALLENGE was not sent in an expanded datagram.
+这个超时允许在路径校验失败前有多个PTO过期，因此单个PATH_CHALLENGE或PATH_RESPONSE帧的丢包不会导致路径校验失败。
 
-An endpoint MUST NOT send more than one PATH_RESPONSE frame in response to one
-PATH_CHALLENGE frame; see {{retransmission-of-information}}.  The peer is
-expected to send more PATH_CHALLENGE frames as necessary to evoke additional
-PATH_RESPONSE frames.
+注意，终端可能在新路径上收到包含其他帧的包，但是路径校验的成功要求一个携带了适当数据的PATH_RESPONSE帧。
 
+当终端放弃路径校验，表面了这条路径是不可用的。这并不一定意味着连接的失败 -- 终端可以继续通过其他适当路径发包。
+如果没路径可用，终端可以等待新的可用路径，或者关闭连接。
+没有到对端的有效网络路径的终端可以(MAY)通过使用NO_VIABLE_PATH的连接错误来发出信号，注意只有当网络路径存在但不支持要求的MTU({{datagram-size}})时才可能出现。
 
-### Successful Path Validation
-
-Path validation succeeds when a PATH_RESPONSE frame is received that contains
-the data that was sent in a previous PATH_CHALLENGE frame.  A PATH_RESPONSE
-frame received on any network path validates the path on which the
-PATH_CHALLENGE was sent.
-
-If an endpoint sends a PATH_CHALLENGE frame in a datagram that is not expanded
-to at least 1200 bytes and if the response to it validates the peer address,
-the path is validated but not the path MTU. As a result, the endpoint can now
-send more than three times the amount of data that has been received. However,
-the endpoint MUST initiate another path validation with an expanded datagram to
-verify that the path supports the required MTU.
-
-Receipt of an acknowledgment for a packet containing a PATH_CHALLENGE frame is
-not adequate validation, since the acknowledgment can be spoofed by a malicious
-peer.
-
-
-### Failed Path Validation
-
-Path validation only fails when the endpoint attempting to validate the path
-abandons its attempt to validate the path.
-
-Endpoints SHOULD abandon path validation based on a timer. When setting this
-timer, implementations are cautioned that the new path could have a longer
-round-trip time than the original.  A value of three times the larger of the
-current PTO or the PTO for the new path (using kInitialRtt, as defined
-in {{QUIC-RECOVERY}}) is RECOMMENDED.
-
-This timeout allows for multiple PTOs to expire prior to failing path
-validation, so that loss of a single PATH_CHALLENGE or PATH_RESPONSE frame
-does not cause path validation failure.
-
-Note that the endpoint might receive packets containing other frames on the new
-path, but a PATH_RESPONSE frame with appropriate data is required for path
-validation to succeed.
-
-When an endpoint abandons path validation, it determines that the path is
-unusable.  This does not necessarily imply a failure of the connection --
-endpoints can continue sending packets over other paths as appropriate.  If no
-paths are available, an endpoint can wait for a new path to become available or
-close the connection.  An endpoint that has no valid network path to its peer
-MAY signal this using the NO_VIABLE_PATH connection error, noting that this is
-only possible if the network path exists but does not support the required
-MTU ({{datagram-size}}).
-
-A path validation might be abandoned for other reasons besides
-failure. Primarily, this happens if a connection migration to a new path is
-initiated while a path validation on the old path is in progress.
-
+除了失败外，路径校验还可能因为其他原因而被放弃。主要是，如果就路径的路径校验正在进行时，连接开始向新路径迁移，就会发生这种情况。
 
 # Connection Migration {#migration}
 
-The use of a connection ID allows connections to survive changes to endpoint
-addresses (IP address and port), such as those caused by an
-endpoint migrating to a new network.  This section describes the process by
-which an endpoint migrates to a new address.
+连接ID的使用允许连接在终端地址变化(IP地址与端口)后存活下来，比如终端迁移到一个新的网络引起的变化。
+本节描述了终端迁移到新地址的处理流程。
 
-The design of QUIC relies on endpoints retaining a stable address for the
-duration of the handshake.  An endpoint MUST NOT initiate connection migration
-before the handshake is confirmed, as defined in {{Section 4.1.2 of QUIC-TLS}}.
+QUIC的设计依赖于终端在握手过程中保持一个稳定的地址。终端禁止(MUST NOT)在握手被确认前启动连接迁移，如{{Section 4.1.2 of QUIC-TLS}}中所定义。
 
-If the peer sent the disable_active_migration transport parameter, an endpoint
-also MUST NOT send packets (including probing packets; see {{probing}}) from a
-different local address to the address the peer used during the handshake,
-unless the endpoint has acted on a preferred_address transport parameter from
-the peer. If the peer violates this requirement, the endpoint MUST either drop
-the incoming packets on that path without generating a Stateless Reset or
-proceed with path validation and allow the peer to migrate. Generating a
-Stateless Reset or closing the connection would allow third parties in the
-network to cause connections to close by spoofing or otherwise manipulating
-observed traffic.
+如果对端发送了disable_active_migration传输参数，终端也禁止(MUST NOT)从不同的本地地址上向对端握手期间使用的地址发送数据包(包括探测数据包；见{{probing}})，除非终端已经根据对端的preferred_address传输参数采取行动。
+如果对端违反了这个要求，终端必须(MUST)丢弃这个路径上的入包而不是生成无状态重置或者进行路径校验以及允许对端迁移。
+产生无状态重置或者关闭连接会允许网络上的第三方通过欺骗或以其他方式操纵观察到的流量从而导致连接关闭。
 
-Not all changes of peer address are intentional, or active, migrations. The peer
-could experience NAT rebinding: a change of address due to a middlebox, usually
-a NAT, allocating a new outgoing port or even a new outgoing IP address for a
-flow.  An endpoint MUST perform path validation ({{migrate-validate}}) if it
-detects any change to a peer's address, unless it has previously validated that
-address.
+不是所有的对端地址改变都是有意或主动迁移的。对端可能经历了NAT重绑定：由中间设备通常是NAT，为流分配了一个新的出站端口甚至一个新的出站IP地址而导致的地址变化。如果检测到对端地址变化，终端必须(MUST)执行路径校验({{migrate-validate}})，除非这个地址之前校验过。
 
-When an endpoint has no validated path on which to send packets, it MAY discard
-connection state.  An endpoint capable of connection migration MAY wait for a
-new path to become available before discarding connection state.
+当终端没有校验完的路径来发送包时，它可能(MAY)会丢弃连接状态。具有连接迁移能力的终端可能(MAY)在丢弃连接状态前等待新路径变得可用。
 
-This document limits migration of connections to new client addresses, except as
-described in {{preferred-address}}. Clients are responsible for initiating all
-migrations.  Servers do not send non-probing packets (see {{probing}}) toward a
-client address until they see a non-probing packet from that address.  If a
-client receives packets from an unknown server address, the client MUST discard
-these packets.
+本文限制了连接向新客户端地址的迁移，{{preferred-address}}中描述的除外。客户端负责发起所有的迁移。
+服务端不会向一个客户端发送非-探测包(见 {{probing}})，直到它从这个地址上看到了非-探测包。
+如果客户端收到了来自未知服务器地址的数据包，客户端必须(MUST)丢弃这些包。
+
+## 探测新路径(Probing a New Path) {#probing}
+
+在将连接迁移到新的本地地址前，终端可以(MAY)使用路径校验({{migrate-validate}})来探测新的本地地址到对端的可达性。
+路径校验的失败仅仅意味着这条新路径对于连接是不可用的。路径校验失败不会导致连接结束，除非没有其他的有效路径可用。
+
+PATH_CHALLENGE、PATH_RESPONSE、NEW_CONNECTION_ID和PADDING帧是 "探测帧"，所有其他帧是 "非探测帧"。仅包含探测帧的数据包是一个“探测包”，而包含任意其他帧的数据包是“非探测包”。
 
 
-## Probing a New Path {#probing}
+## 发起连接迁移(Initiating Connection Migration) {#initiating-migration}
 
-An endpoint MAY probe for peer reachability from a new local address using path
-validation ({{migrate-validate}}) prior to migrating the connection to the new
-local address.  Failure of path validation simply means that the new path is not
-usable for this connection.  Failure to validate a path does not cause the
-connection to end unless there are no valid alternative paths available.
+通过从新的本地地址发送包含非探测帧的包可以使得终端将连接迁移到这个地址上。
 
-PATH_CHALLENGE, PATH_RESPONSE, NEW_CONNECTION_ID, and PADDING frames are
-"probing frames", and all other frames are "non-probing frames".  A packet
-containing only probing frames is a "probing packet", and a packet containing
-any other frame is a "non-probing packet".
+在连接建立期间，两端都会校验其对端的地址。因此，在知道对端是有意愿在对端当前地址上接收时，迁移的终端可以发送到它的对端。
+因此，不需要先校验对端地址，终端就可以迁移到一个新的本地地址上。
 
+为了在新路径上建立可达性，终端可以在新路径上发起路径校验({{migrate-validate}})。终端可以(MAY)推迟路径校验到对端向它的新地址发送了下一个非探测帧之后。
 
-## Initiating Connection Migration {#initiating-migration}
+当迁移时，新路径可能不支持终端当前的发送速率。因此，终端需要重置它的拥塞控制器和RTT估计，如{{migration-cc}}中所描述。
 
-An endpoint can migrate a connection to a new local address by sending packets
-containing non-probing frames from that address.
-
-Each endpoint validates its peer's address during connection establishment.
-Therefore, a migrating endpoint can send to its peer knowing that the peer is
-willing to receive at the peer's current address. Thus, an endpoint can migrate
-to a new local address without first validating the peer's address.
-
-To establish reachability on the new path, an endpoint initiates path
-validation ({{migrate-validate}}) on the new path.  An endpoint MAY defer path
-validation until after a peer sends the next non-probing frame to its new
-address.
-
-When migrating, the new path might not support the endpoint's current sending
-rate. Therefore, the endpoint resets its congestion controller and RTT estimate,
-as described in {{migration-cc}}.
-
-The new path might not have the same ECN capability. Therefore, the endpoint
-validates ECN capability as described in {{ecn}}.
+新路径可能不具备同样的ECN能力。因此，终端会校验ECN能力，如{{ecn}}中所描述。
 
 
-## Responding to Connection Migration {#migration-response}
+## 连接迁移的响应(Responding to Connection Migration) {#migration-response}
 
-Receiving a packet from a new peer address containing a non-probing frame
-indicates that the peer has migrated to that address.
+从新的对端地址上收到了包含非探测帧的包表明，对端已经迁移到了这个地址。
 
-If the recipient permits the migration, it MUST send subsequent packets
-to the new peer address and MUST initiate path validation ({{migrate-validate}})
-to verify the peer's ownership of the address if validation is not already
-underway. If the recipient has no unused connection IDs from the peer, it will
-not be able to send anything on the new path until the peer provides one; see
-{{migration-linkability}}.
+如果接收方允许迁移，它必须(MUST)把后续的包发到新的对端地址上，并且如果校验尚未进行，必须(MUST)发起路径校验({{migrate-validate}})去验证对端对地址的所有权。
+如果接受方没有来自对端的未使用的连接ID，它将无法在新路径上发送任何东西，直到对端提供了一个ID；参见{{migration-linkability}}。
 
-An endpoint only changes the address to which it sends packets in response to
-the highest-numbered non-probing packet. This ensures that an endpoint does not
-send packets to an old peer address in the case that it receives reordered
-packets.
+终端仅在响应最高编号的非探测包时才改变其发包的地址。这确保了终端不会向旧的对端地址上发包。
 
-An endpoint MAY send data to an unvalidated peer address, but it MUST protect
-against potential attacks as described in Sections {{<address-spoofing}} and
-{{<on-path-spoofing}}.  An endpoint MAY skip validation of a peer address if
-that address has been seen recently.  In particular, if an endpoint returns to a
-previously validated path after detecting some form of spurious migration,
-skipping address validation and restoring loss detection and congestion state
-can reduce the performance impact of the attack.
+终端可以(MAY)向未验证的对端地址发送数据，但必须(MUST)防止 {{<address-spoofing}} 与 {{<on-path-spoofing}} 中描述的潜在攻击。
+终端可以(MAY)跳过对端的地址验证，如果这个地址最近见过。特别是，如果终端在检测到某种形式的虚假迁移后返回到先前验证的路径，跳过地址验证并恢复丢包检测与拥塞状态可以减少这种攻击的性能影响。
 
-After changing the address to which it sends non-probing packets, an endpoint
-can abandon any path validation for other addresses.
+在发送非探测包的地址改变后，终端可以放弃对其他地址的路径校验。
 
-Receiving a packet from a new peer address could be the result of a NAT
-rebinding at the peer.
+从新的对端地址接收数据包也可能是由于对端NAT重绑定导致。
 
-After verifying a new client address, the server SHOULD send new address
-validation tokens ({{address-validation}}) to the client.
+在验证了新的客户端地址后，服务端应当(SHOULD)发送新的地址校验令牌({{address-validation}})给客户端。
 
 
-### Peer Address Spoofing {#address-spoofing}
+### 对端地址欺骗(Peer Address Spoofing) {#address-spoofing}
 
-It is possible that a peer is spoofing its source address to cause an endpoint
-to send excessive amounts of data to an unwilling host.  If the endpoint sends
-significantly more data than the spoofing peer, connection migration might be
-used to amplify the volume of data that an attacker can generate toward a
-victim.
+有可能对端在伪造其源地址使得终端向一个无意愿的主机发送过多的数据。如果终端发送的数据明显多于欺骗的对端，连接迁移可能被用于放大攻击者向受害者发送的数据量。
 
-As described in {{migration-response}}, an endpoint is required to validate a
-peer's new address to confirm the peer's possession of the new address. Until a
-peer's address is deemed valid, an endpoint limits the amount of data it sends
-to that address; see {{address-validation}}. In the absence of this limit, an
-endpoint risks being used for a denial-of-service attack against an
-unsuspecting victim.
+如{{migration-response}}中所描述，终端需要验证对端的新地址来确认对端对新地址的拥有。在对端地址被认为有效前，终端需要限制向这个地址发送的数据量；见{{address-validation}}。如果这个限制缺失，终端可能被用于对无戒心的受害者进行拒绝服务攻击。
 
-If an endpoint skips validation of a peer address as described above, it does
-not need to limit its sending rate.
+如果终端如上所述的跳过了对端地址的校验，它不需要限制它的发送速率。
 
 
-### On-Path Address Spoofing {#on-path-spoofing}
+### 路径上的地址欺骗(On-Path Address Spoofing) {#on-path-spoofing}
 
-An on-path attacker could cause a spurious connection migration by copying and
-forwarding a packet with a spoofed address such that it arrives before the
-original packet.  The packet with the spoofed address will be seen to come from
-a migrating connection, and the original packet will be seen as a duplicate and
-dropped. After a spurious migration, validation of the source address will fail
-because the entity at the source address does not have the necessary
-cryptographic keys to read or respond to the PATH_CHALLENGE frame that is sent
-to it even if it wanted to.
+路径上的攻击者可以通过复制和转发一个带有伪造地址的数据包，使它在原始包之前到达，即可造成欺骗的连接迁移。
+带有伪造地址的数据包将被视为来自连接的迁移，而原始数据包会被视作重复的包并被丢弃。
+在虚假迁移之后，源地址的校验会失败，因为源地址上的实体没有需要的加密密钥来读取或响应发给它的PATH_CHALLENGE帧，即使它想这样做。
 
-To protect the connection from failing due to such a spurious migration, an
-endpoint MUST revert to using the last validated peer address when validation
-of a new peer address fails.  Additionally, receipt of packets with higher
-packet numbers from the legitimate peer address will trigger another connection
-migration.  This will cause the validation of the address of the spurious
-migration to be abandoned, thus containing migrations initiated by the attacker
-injecting a single packet.
+为了保护连接不因为虚假的迁移而失败，当校验新的对端地址失败时，终端必须(MUST)恢复到使用最后校验过的对端地址。
+此外，收到来自合法对端地址上的更高包编号的包也会触发另一次连接迁移。这会导致放弃对虚假迁移地址的验证，从而遏制由攻击者注入单个数据包发起的迁移。
 
-If an endpoint has no state about the last validated peer address, it MUST close
-the connection silently by discarding all connection state. This results in new
-packets on the connection being handled generically. For instance, an endpoint
-MAY send a Stateless Reset in response to any further incoming packets.
+如果终端没有关于最后一个已验证的对端地址状态，它必须(MUST)通过丢弃所有的连接状态来静默关闭连接。
+这使得连接上的新数据包可以被通用的处理。例如，终端可以(MAY)在任意后续的入包响应中发送一个无状态重置。
 
 
-### Off-Path Packet Forwarding {#off-path-forward}
+### 路径外包转发(Off-Path Packet Forwarding) {#off-path-forward}
 
-An off-path attacker that can observe packets might forward copies of genuine
-packets to endpoints.  If the copied packet arrives before the genuine packet,
-this will appear as a NAT rebinding.  Any genuine packet will be discarded as a
-duplicate.  If the attacker is able to continue forwarding packets, it might be
-able to cause migration to a path via the attacker.  This places the attacker
-on-path, giving it the ability to observe or drop all subsequent packets.
+一个能够观察到包的路径外攻击者可能会将真正数据包的拷贝转给终端。如果复制的包在真正包之前到达，这会被当做NAT重绑定。
+而真正的数据包会被当做重复而被丢弃。如果攻击者有能力继续转发包，它可能会导致迁移到一条经过攻击者的路径上。
+这将攻击者置于路径上，使其有能力观察或丢弃所有的后续数据包。
 
-This style of attack relies on the attacker using a path that has approximately
-the same characteristics as the direct path between endpoints.  The attack is
-more reliable if relatively few packets are sent or if packet loss coincides
-with the attempted attack.
+这种攻击方式依赖攻击者使用的路径与终端间的直接路径具有大致相同的特征。如果数据包丢失与试图攻击的时间吻合，或发送的数据包比较少，这种攻击会比较可靠。
 
-A non-probing packet received on the original path that increases the maximum
-received packet number will cause the endpoint to move back to that path.
-Eliciting packets on this path increases the likelihood that the attack is
-unsuccessful.  Therefore, mitigation of this attack relies on triggering the
-exchange of packets.
+在原路径上收到的增加了最大接收包编号的非探测包会导致终端移回那条路径。路径上的诱导包会增加攻击不成功的可能性。因此，缓解这种攻击依赖于触发数据包的交换。
 
-In response to an apparent migration, endpoints MUST validate the previously
-active path using a PATH_CHALLENGE frame.  This induces the sending of new
-packets on that path.  If the path is no longer viable, the validation attempt
-will time out and fail; if the path is viable but no longer desired, the
-validation will succeed but only results in probing packets being sent on the
-path.
+在透明迁移的应答中，终端必须(MUST)使用PATH_CHALLENGE帧来校验之前的活跃路径。这诱发了该路径上新数据包的发送。
+如果路径不再可用，这个校验的尝试会超时并失败；如果该路径可用但不再需要，校验会成功但是仅有探测包会在这条路径上发送。
 
-An endpoint that receives a PATH_CHALLENGE on an active path SHOULD send a
-non-probing packet in response.  If the non-probing packet arrives before any
-copy made by an attacker, this results in the connection being migrated back to
-the original path.  Any subsequent migration to another path restarts this
-entire process.
+终端在活跃路径上收到了PATH_CHALLENGE后应当(SHOULD)发送一个非探测包作为响应。如果非探测包在任意攻击者做的拷贝前到达，会导致连接迁移回原来的路径。任何后续到其他路径的迁移都会重新启动整个过程。
 
-This defense is imperfect, but this is not considered a serious problem. If the
-path via the attack is reliably faster than the original path despite multiple
-attempts to use that original path, it is not possible to distinguish between an
-attack and an improvement in routing.
+这种防御是不完美的，但是这并不是一个严重的问题。如果攻击的路径稳定的比原始路径快，即使多次尝试使用原始路径，也无法区分到底是攻击还是路由的改进。
 
-An endpoint could also use heuristics to improve detection of this style of
-attack.  For instance, NAT rebinding is improbable if packets were recently
-received on the old path; similarly, rebinding is rare on IPv6 paths.  Endpoints
-can also look for duplicated packets.  Conversely, a change in connection ID is
-more likely to indicate an intentional migration rather than an attack.
+终端也可以使用启发式的方法来改进对这种攻击方式的检测。例如，如果数据包最近在老路径上收到过，那么就不可能是NAT重绑定；同样地，重绑定在IPv6路径上也比较罕见。终端也可以寻找重复的包。相反，如果连接ID变化更可能表面是有意的迁移而不是攻击。
 
 
 ## Loss Detection and Congestion Control {#migration-cc}
 
-The capacity available on the new path might not be the same as the old path.
-Packets sent on the old path MUST NOT contribute to congestion control or RTT
-estimation for the new path.
+新路径上的可用能力与旧路径可能不一样。在旧路径上的发包禁止(MUST NOT)用于为新路径的拥塞控制或RTT估计做出贡献。
 
-On confirming a peer's ownership of its new address, an endpoint MUST
-immediately reset the congestion controller and round-trip time estimator for
-the new path to initial values (see Appendices {{A.3<QUIC-RECOVERY}} and
-{{B.3<QUIC-RECOVERY}} of {{QUIC-RECOVERY}}) unless the only change in the peer's
-address is its port number.  Because port-only changes are commonly the result
-of NAT rebinding or other middlebox activity, the endpoint MAY instead retain
-its congestion control state and round-trip estimate in those cases instead of
-reverting to initial values.  In cases where congestion control state retained
-from an old path is used on a new path with substantially different
-characteristics, a sender could transmit too aggressively until the congestion
-controller and the RTT estimator have adapted. Generally, implementations are
-advised to be cautious when using previous values on a new path.
+在确认对端对新地址的所有权时，终端必须(MUST)立即将新路径的拥塞控制器与往返时间估量器重置为初始值(参见 {{A.3<QUIC-RECOVERY}} 和 {{B.3<QUIC-RECOVERY}} of {{QUIC-RECOVERY}})，除非对端地址仅变化了其端口号。
+因为仅端口的变化通常是NAT重绑定或其他中间件的行为，在这种场景下，终端可以(MAY)保持其拥塞控制状态与往返估计，而不是恢复到初始值。
+如果从旧路径上保留的拥塞控制状态被用于特性有较大区别的新路径上，发送者可能会在拥塞控制器与RTT适应器适应之前过于激进的传输。一般来说，建议实现时谨慎地在新路径上使用之前的值。
 
-There could be apparent reordering at the receiver when an endpoint sends data
-and probes from/to multiple addresses during the migration period, since the two
-resulting paths could have different round-trip times.  A receiver of packets on
-multiple paths will still send ACK frames covering all received packets.
+当终端在迁移期间从/向多个地址发送数据与探测时，接收方可能有明显的重排序，因为两条路径上可能有不同的往返时间。
+在多条路径上的数据包接收者仍将对所有收到的包发送ACK帧。
 
-While multiple paths might be used during connection migration, a single
-congestion control context and a single loss recovery context (as described in
-{{QUIC-RECOVERY}}) could be adequate.  For instance, an endpoint might delay
-switching to a new congestion control context until it is confirmed that an old
-path is no longer needed (such as the case described in {{off-path-forward}}).
+虽然在连接迁移过程中可能用到多条路径，但单个拥塞控制上下文与单个丢失恢复上下文(如{{QUIC-RECOVERY}}中所描述)可能是足够的。
+例如，终端可能会推辞切换拥塞控制上下文直到它确认旧路径不再需要(如{{off-path-forward}}中所描述的情况)。
 
-A sender can make exceptions for probe packets so that their loss detection is
-independent and does not unduly cause the congestion controller to reduce its
-sending rate.  An endpoint might set a separate timer when a PATH_CHALLENGE is
-sent, which is canceled if the corresponding PATH_RESPONSE is received. If the
-timer fires before the PATH_RESPONSE is received, the endpoint might send a new
-PATH_CHALLENGE and restart the timer for a longer period of time.  This timer
-SHOULD be set as described in {{Section 6.2.1 of QUIC-RECOVERY}} and MUST NOT be
-more aggressive.
+发送者可以对探测包进行特殊处理，以便探测包的丢失检测是独立的，不会不当地导致拥塞控制器降低其发送速率。
+终端可以在发送PATH_CHALLENGE时设置一个单独的定时器，当收到对应的PATH_RESPONSE收到时，定时器被取消。
+如果定时器在收到PATH_RESPONSE前到期，终端可以发送一个新的PATH_CHALLENGE并重启一个更长周期的定时器。
+定时器应当(SHOULD)按{{Section 6.2.1 of QUIC-RECOVERY}}中描述的设置且禁止(MUST NOT)设置得更激进。
 
 
-## Privacy Implications of Connection Migration {#migration-linkability}
+## 连接迁移对隐私的影响(Privacy Implications of Connection Migration) {#migration-linkability}
 
-Using a stable connection ID on multiple network paths would allow a passive
-observer to correlate activity between those paths.  An endpoint that moves
-between networks might not wish to have their activity correlated by any entity
-other than their peer, so different connection IDs are used when sending from
-different local addresses, as discussed in {{connection-id}}.  For this to be
-effective, endpoints need to ensure that connection IDs they provide cannot be
-linked by any other entity.
+在多个网络路径上使用稳定的连接ID，可以让被动观察者将这些路径间的活动联系起来。
+在网络间移动的终端可能不希望他们的活动被对端以外的任意实体所关联，因此在不同的本地地址上发送时会使用不同的连接ID，如{{connection-id}}中所讨论。
+为了使之有效，终端需要确保他们提供的连接ID不能被其他任意实体关联。
 
-At any time, endpoints MAY change the Destination Connection ID they transmit
-with to a value that has not been used on another path.
+在任何时刻，终端可以(MAY)改变他们传输的目的连接ID为一个未在其他路径上使用的值。
 
-An endpoint MUST NOT reuse a connection ID when sending from more than one local
-address -- for example, when initiating connection migration as described in
-{{initiating-migration}} or when probing a new network path as described in
-{{probing}}.
+在多个本地地址上发送时，终端禁止(MUST NOT)重用连接ID -- 例如，当如{{initiating-migration}}中所描述的发起连接迁移时或如{{probing}}中所描述地探测新网络路径时。
 
-Similarly, an endpoint MUST NOT reuse a connection ID when sending to more than
-one destination address.  Due to network changes outside the control of its
-peer, an endpoint might receive packets from a new source address with the same
-Destination Connection ID field value, in which case it MAY continue to use the
-current connection ID with the new remote address while still sending from the
-same local address.
+同样，向多个目的地址发送时，终端禁止(MUST NOT)重用连接ID。
+由于网络变化不受对端的控制，终端可能会从一个新的源地址上收到具有相同目的地连接ID字段值的数据包，在这种场景下，它可以(MAY)在新的远端地址上继续使用当前连接ID，同时仍然从同个本地地址上发送。
 
-These requirements regarding connection ID reuse apply only to the sending of
-packets, as unintentional changes in path without a change in connection ID are
-possible.  For example, after a period of network inactivity, NAT rebinding
-might cause packets to be sent on a new path when the client resumes sending.
-An endpoint responds to such an event as described in {{migration-response}}.
+这些关于连接ID重用的要求只适用于数据包的发送，因为可能存在路径无意中被改变而连接ID不变的情况。
+例如，在网络不活跃一段时间后，当客户端恢复发送时，NAT重绑定可能导致数据包在一个新的路径上发送。
+终端对这种事件的响应如{{migration-response}}中所描述。
 
-Using different connection IDs for packets sent in both directions on each new
-network path eliminates the use of the connection ID for linking packets from
-the same connection across different network paths.  Header protection ensures
-that packet numbers cannot be used to correlate activity.  This does not prevent
-other properties of packets, such as timing and size, from being used to
-correlate activity.
+对每个新的网络路径上双向发送的数据包使用不同的连接ID，可以消除通过连接ID来关联不同网络路径上的同个连接。
+包头保护确保了包编号不能被用于关联活动。这并不能避免包的其他属性，比如时间与大小，被用于关联活动。
 
-An endpoint SHOULD NOT initiate migration with a peer that has requested a
-zero-length connection ID, because traffic over the new path might be trivially
-linkable to traffic over the old one.  If the server is able to associate
-packets with a zero-length connection ID to the right connection, it means that
-the server is using other information to demultiplex packets.  For example, a
-server might provide a unique address to every client -- for instance, using
-HTTP alternative services {{?ALTSVC=RFC7838}}.  Information that might allow
-correct routing of packets across multiple network paths will also allow
-activity on those paths to be linked by entities other than the peer.
+终端不应当(SHOULD NOT)与要求0长度连接ID的对端发起迁移，因为新路径上的流量可能被联系到旧路径的流量上。
+如果服务端有能力将具有零长度连接ID的包与正确的连接联系起来，这意味着服务端使用了其他信息来解复用包。
+例如，服务端可能给每个客户端提供了唯一的地址 -- 例如，使用HTTP可选服务{{?ALTSVC=RFC7838}}。
+而允许数据包在多个网络路径上被正确路由的信息也使得这些路径上的活动被对端以外的其他实体联系起来。
 
-A client might wish to reduce linkability by switching to a new connection ID,
-source UDP port, or IP address (see {{?RFC8981}}) when sending traffic after a
-period of inactivity.  Changing the address from which it sends packets at the
-same time might cause the server to detect a connection migration. This
-ensures that the mechanisms that support migration are exercised even for
-clients that do not experience NAT rebindings or genuine migrations.  Changing
-address can cause a peer to reset its congestion control state (see
-{{migration-cc}}), so addresses SHOULD only be changed infrequently.
+在一段时间不活跃后，客户端发送流量时可能希望通过切换到一个新的连接ID、源UDP端口，或IP地址(见{{?RFC8981}})来减少可关联性。而改变了发包地址同时也导致服务端检测到一次连接迁移。
+这确保了支持迁移的机制被执行，即使是没经历NAT重绑定或真正迁移的客户端。改变地址会导致对端重置其拥塞控制状态(见{{migration-cc}})，因此地址应当(SHOULD)低频的被改变。
 
-An endpoint that exhausts available connection IDs cannot probe new paths or
-initiate migration, nor can it respond to probes or attempts by its peer to
-migrate.  To ensure that migration is possible and packets sent on different
-paths cannot be correlated, endpoints SHOULD provide new connection IDs before
-peers migrate; see {{issue-cid}}.  If a peer might have exhausted available
-connection IDs, a migrating endpoint could include a NEW_CONNECTION_ID frame in
-all packets sent on a new network path.
+耗尽了连接ID的终端无法探测新路径或发起迁移，也无法响应探测或对端的迁移尝试。为了确保迁移的可行性与不同路径上发送的包不被关联，终端应当(SHOULD)在对端迁移前提供新的连接ID；见{{issue-cid}}。
+如果对端已经耗尽了可用的连接ID，一个迁移的终端可以在新路径上发送的所有包中都包含一个NEW_CONNECTION_ID帧。
 
 
-## Server's Preferred Address {#preferred-address}
+## 服务端首选地址(Server's Preferred Address) {#preferred-address}
 
-QUIC allows servers to accept connections on one IP address and attempt to
-transfer these connections to a more preferred address shortly after the
-handshake.  This is particularly useful when clients initially connect to an
-address shared by multiple servers but would prefer to use a unicast address to
-ensure connection stability. This section describes the protocol for migrating a
-connection to a preferred server address.
+QUIC 允许服务端在一个IP地址上接受连接且尝试在握手不久后将连接迁移到一个更推荐的地址上。
+当客户端发起连接到一个由多个服务器共享的地址但希望使用单播地址以确保连接的稳定性时，这一点特别有用。
+本节描述了将连接迁移到服务端首选地址的协议。
 
-Migrating a connection to a new server address mid-connection is not supported
-by the version of QUIC specified in this document. If a client receives packets
-from a new server address when the client has not initiated a migration to that
-address, the client SHOULD discard these packets.
-
-### Communicating a Preferred Address
-
-A server conveys a preferred address by including the preferred_address
-transport parameter in the TLS handshake.
-
-Servers MAY communicate a preferred address of each address family (IPv4 and
-IPv6) to allow clients to pick the one most suited to their network attachment.
-
-Once the handshake is confirmed, the client SHOULD select one of the two
-addresses provided by the server and initiate path validation (see
-{{migrate-validate}}).  A client constructs packets using any previously unused
-active connection ID, taken from either the preferred_address transport
-parameter or a NEW_CONNECTION_ID frame.
-
-As soon as path validation succeeds, the client SHOULD begin sending all
-future packets to the new server address using the new connection ID and
-discontinue use of the old server address.  If path validation fails, the client
-MUST continue sending all future packets to the server's original IP address.
+本文档中规定的QUIC版本并不支持在连接中途将连接迁移到新的服务端地址上。如果客户端收到了来自新的服务端地址的数据包且客户端没有发起迁移到那个地址上，客户端应当(SHOULD)丢弃这些包。
 
 
-### Migration to a Preferred Address
+### 与首选地址通信(Communicating a Preferred Address)
 
-A client that migrates to a preferred address MUST validate the address it
-chooses before migrating; see {{forgery-spa}}.
+服务端通过在TLS握手中包含preferred_address的传输参数来传达首选地址。
 
-A server might receive a packet addressed to its preferred IP address at any
-time after it accepts a connection.  If this packet contains a PATH_CHALLENGE
-frame, the server sends a packet containing a PATH_RESPONSE frame as per
-{{migrate-validate}}.  The server MUST send non-probing packets from its
-original address until it receives a non-probing packet from the client at its
-preferred address and until the server has validated the new path.
+服务端可以(MAY)传达每个地址族(IPv4与IPv6)的首选地址，以允许客户端选择最适合其网络附件的地址。
 
-The server MUST probe on the path toward the client from its preferred address.
-This helps to guard against spurious migration initiated by an attacker.
+一旦握手确认，客户端应当(SHOULD)从服务端提供的两个地址中选择一个，并启动路径校验(见{{migrate-validate}})。
+客户端可以使用任意之前未使用的活跃连接ID来构建包，该ID取自preferred_address传输参数或NEW_CONNECTION_ID帧。
 
-Once the server has completed its path validation and has received a non-probing
-packet with a new largest packet number on its preferred address, the server
-begins sending non-probing packets to the client exclusively from its preferred
-IP address. The server SHOULD drop newer packets for this connection that are
-received on the old IP address. The server MAY continue to process delayed
-packets that are received on the old IP address.
-
-The addresses that a server provides in the preferred_address transport
-parameter are only valid for the connection in which they are provided. A
-client MUST NOT use these for other connections, including connections that are
-resumed from the current connection.
+一旦路径校验成功，客户端应当(SHOULD)开始使用新的连接ID向新的服务器地址发送所有后续的包，并停止使用旧的服务端地址。如果路径校验失败，客户端必须(MUST)继续向服务端的原始IP地址发送后续的数据包。
 
 
-### Interaction of Client Migration and Preferred Address
+### 迁移到首选地址(Migration to a Preferred Address)
 
-A client might need to perform a connection migration before it has migrated to
-the server's preferred address.  In this case, the client SHOULD perform path
-validation to both the original and preferred server address from the client's
-new address concurrently.
+迁移到一个首选地址的客户端必须(MUST)在迁移前验证其选择的地址；见{{forgery-spa}}。
 
-If path validation of the server's preferred address succeeds, the client MUST
-abandon validation of the original address and migrate to using the server's
-preferred address.  If path validation of the server's preferred address fails
-but validation of the server's original address succeeds, the client MAY migrate
-to its new address and continue sending to the server's original address.
+在接受一个连接后的任何时候，服务端都可能收到一个针对其首选IP地址的包。如果包中包含PATH_CHALLENGE帧，服务端会按照{{migrate-validate}}地发送一个包含PATH_RESPONSE帧的包。
+服务端必须(MUST)从其原始地址上发送非探测包，直到它在其首选地址上收到了来自客户端的非探测包，并且服务端已经验证了新路径。
 
-If packets received at the server's preferred address have a different source
-address than observed from the client during the handshake, the server MUST
-protect against potential attacks as described in Sections {{<address-spoofing}}
-and {{<on-path-spoofing}}.  In addition to intentional simultaneous migration,
-this might also occur because the client's access network used a different NAT
-binding for the server's preferred address.
+服务端必须(MUST)探测从它首选地址到客户端的路径。这有助于防止由攻击者发起的虚假迁移。
 
-Servers SHOULD initiate path validation to the client's new address upon
-receiving a probe packet from a different address; see {{address-validation}}.
+一旦服务端完成了路径校验且在它的首选地址上收到了一个具有新的最大包编号的非探测包，服务端就开始独占的从它的首选IP地址上向客户端发送非探测包。
+服务端应当(SHOULD)丢弃在旧IP地址上接收到的这个连接的较新的数据包。服务端可以(MAY)继续处理在旧IP地址上到的延迟的数据包。
 
-A client that migrates to a new address SHOULD use a preferred address from the
-same address family for the server.
-
-The connection ID provided in the preferred_address transport parameter is not
-specific to the addresses that are provided. This connection ID is provided to
-ensure that the client has a connection ID available for migration, but the
-client MAY use this connection ID on any path.
+服务端在preferred_address传输参数中提供的地址只对提供了这些地址的连接有效。客户端禁止(MUST NOT)使用它们用于其他的连接，包括从当前连接恢复的连接。
 
 
-## Use of IPv6 Flow Label and Migration {#ipv6-flow-label}
+### 客户端迁移与首选地址的交互(Interaction of Client Migration and Preferred Address)
 
-Endpoints that send data using IPv6 SHOULD apply an IPv6 flow label in
-compliance with {{!RFC6437}}, unless the local API does not allow setting IPv6
-flow labels.
+客户端可能需要在迁移到服务器的首选地址前执行连接迁移。在这种情况下，客户端应当(SHOULD)在客户端的新地址上同时对原始地址与首选地址执行路径校验。
 
-The flow label generation MUST be designed to minimize the chances of
-linkability with a previously used flow label, as a stable flow label would
-enable correlating activity on multiple paths; see {{migration-linkability}}.
+如果服务端首选地址的路径校验成功，客户端必须(MUST)放弃对原始地址的的校验并迁移到使用服务端的首选地址。如果对服务端的首选地址校验失败但服务端的原始地址成功，客户端可以(MAY)迁移到其新的地址并继续向服务端的原始地址发送。
 
-{{?RFC6437}} suggests deriving values using a pseudorandom function to generate
-flow labels.  Including the Destination Connection ID field in addition to
-source and destination addresses when generating flow labels ensures that
-changes are synchronized with changes in other observable identifiers.  A
-cryptographic hash function that combines these inputs with a local secret is
-one way this might be implemented.
+如果在服务端首选地址收到的数据包源地址与握手期间从客户端观察的不同，则服务端必须(MUST)防止{{<address-spoofing}}
+与 {{<on-path-spoofing}}中描述的潜在攻击。
+除了有意的同步迁移外，还可能因为客户端的访问网络在对服务器首选地址时使用了不同的NAT绑定。
+
+服务端在收到来自不同地址的探测包时，应当(SHOULD)发起对客户端新地址的路径校验；见 {{address-validation}}。
+
+迁移到新地址的客户端应当(SHOULD)使用服务端相同地址族的首选地址。
+
+preferred_address传输参数中提供的连接ID并不特定于所提供的地址。提供这个连接ID是为了确保客户端有可用的连接ID来迁移，但客户端可以(MAY)在任意路径上使用这个连接ID。
+
+
+## IPv6流标签的使用与迁移(Use of IPv6 Flow Label and Migration) {#ipv6-flow-label}
+
+使用IPv6发送数据的终端应当(SHOULD)按照{{!RFC6437}}规定应用IPv6流标签，除非本地的API不支持设置IPv6流标签。
+
+流标签的生成必须(MUST)被设计成最大限度的减少与之前使用的流标签发生关联的机会，因为一个固定的流标签使得能够将多个路径上的活动关联起来；参见{{migration-linkability}}。
+
+{{?RFC6437}}建议使用伪随机函数导出值来生成流量标签。在生成流量标签时，除了源地址和目的地址之外，还包括目的地连接ID字段，确保变化与其他可观察的标识符的变化同步。将这些输入与本地秘钥相结合的加密哈希函数是一种可能的实现方式。
 
 
 # Connection Termination {#termination}
